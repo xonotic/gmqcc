@@ -215,9 +215,26 @@ static void diagnostic_feed(parser_t *parser, size_t beg, size_t end, bool marke
         con_out("\n");
     }
 
-    /* find it in the last line */
-    if ((peek = strstr(vec_last(read), find))) {
-        space = peek - vec_last(read) + 6; /*% 4d|*/
+    /* MOTHER FUCKING HACK! */
+    /* MOTHER FUCKING HACK! */
+    if (!strcmp(find, "SEMICOLON")) {
+        space = 0;
+        len = 0;
+        while (vec_last(read)[space] != '=')
+            space++;
+        space++;
+        while (vec_last(read)[space] == ' ')
+            space++;
+
+        while (vec_last(read)[space + len] != '\n')
+            len++;
+
+        space += 6;
+    } else {
+        /* find it in the last line */
+        if ((peek = strstr(vec_last(read), find))) {
+            space = peek - vec_last(read) + 6; /*% 4d|*/
+        }
     }
 
     while (space --) con_out(" ");
@@ -256,16 +273,20 @@ static void diagnostic_destroy() {
     vec_free  (diagnostic_index);
 }
 
-static void diagnostic_calculate(parser_t *parser) {
+static void diagnostic_calculate(parser_t *parser, const char *fmt) {
     size_t linebeg = 1;
     size_t linecnt = 1;
+    bool   marker  = false;
 
+    if (strstr(fmt, "missing semicolon"))
+        linebeg++, marker = true;
     /*
      * special linebeg/ linecnt offset calculations can be done
      * here.
      */  
 
-    diagnostic_feed(parser, linebeg, linecnt, false);
+    diagnostic_feed(parser, linebeg, linecnt, marker);
+    parser->lex->tok.value = NULL; /* MOTHER FUCKING HACK! */
 }
 
 static void parseerror(parser_t *parser, const char *fmt, ...)
@@ -280,7 +301,7 @@ static void parseerror(parser_t *parser, const char *fmt, ...)
 
     /* only print when not bailing out */
     if (!strstr(fmt, "bailing out"))
-        diagnostic_calculate(parser);
+        diagnostic_calculate(parser, fmt);
 }
 
 /* returns true if it counts as an error */
@@ -5269,6 +5290,9 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
     }
 
     while (true) {
+        ast_expression *cexp;
+        ast_value      *cval;
+
         proto = NULL;
         wasarray = false;
 
@@ -5828,9 +5852,6 @@ skipvar:
             vec_free(parser->labels);
             return true;
         } else {
-            ast_expression *cexp;
-            ast_value      *cval;
-
             cexp = parse_expression_leave(parser, true, false, false);
             if (!cexp)
                 break;
@@ -5908,6 +5929,8 @@ another:
         }
 
         if (parser->tok != ';') {
+            /* MOTHER FUCKING HACK! */
+            parser->lex->tok.value = "SEMICOLON";
             parseerror(parser, "missing semicolon after variables");
             break;
         }
