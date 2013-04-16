@@ -413,6 +413,6 @@ ast_expression *intrin_func(parser_t *parser, const char *name) {
         return ((intrin_t*)find)->intrin(parser);
     }
 
-    parseerror(parser, "need function: `%s` compiler depends on it", name);
+    /*parseerror(parser, "need function: `%s` compiler depends on it", name);*/
     return NULL;
 }

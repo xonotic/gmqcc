@@ -121,12 +121,166 @@ static ast_value* parser_create_array_setter_proto(parser_t *parser, ast_value *
 static ast_value* parser_create_array_getter_proto(parser_t *parser, ast_value *array, const ast_expression *elemtype, const char *funcname);
 static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_value *cached_typedef);
 
+
+/* map<string, vector<char>> */
+ht        diagnostic_table = NULL;
+char    **diagnostic_index = NULL;
+uint32_t  diagnostic_item  = 0;
+
+static void diagnostic_line(parser_t *parser, char ***read, size_t beg, size_t end) {
+    char **lines = NULL;
+    size_t feed  = 0;
+
+    if (!diagnostic_table)
+         diagnostic_table = util_htnew(1024);
+
+    if (!(lines = (char**)util_htget(diagnostic_table, parser->lex->name))) {
+        char  *data  = NULL;
+        size_t size  = 0;
+        FILE *handle = fs_file_open(parser->lex->name, "r");
+
+        while (fs_file_getline(&data, &size, handle) != EOF) {
+            /* claim memory for string */
+            char *claim = util_strdup(data);
+
+            vec_push(lines, claim);
+        }
+        mem_d(data);
+        
+        util_htset(diagnostic_table, parser->lex->name, lines);
+        vec_push(diagnostic_index, parser->lex->name);
+        fs_file_close(handle);
+    }
+
+    /* store the lines request back to the vector */
+    if (parser->lex->line - beg + end > vec_size(lines)) {
+        beg = 1;
+        end = 1;
+    }
+
+    for(feed = parser->lex->line - beg; feed < parser->lex->line - beg + end; ++feed)
+        vec_push((*read), lines[feed]);
+}
+
+static void diagnostic_feed(parser_t *parser, size_t beg, size_t end, bool marker) {
+    lex_file *lexer = NULL;
+    char    **read  = NULL;
+    char     *peek  = NULL;
+    char     *find  = parser->lex->tok.value;
+    size_t    feed  = 0;
+    size_t    space = 0;
+    size_t    len   = strlen(find);
+    int       tok   = 0;
+
+    diagnostic_line(parser, &read, beg, end);
+
+    for (; feed < vec_size(read); feed++) {
+        lexer = lex_open_string(read[feed], strlen(read[feed]), parser->lex->name);
+        lexer->flags.preprocessing = true; /* enable whitespace */
+        lexer->flags.mergelines    = true;
+
+        con_out("% 4d| ", parser->lex->line - beg + feed + 1); 
+
+        /* fancy printing */
+        while ((tok = lex_do(lexer)) != TOKEN_EOF) {
+            switch (tok) {
+
+                case TOKEN_TYPENAME:
+                case TOKEN_KEYWORD:
+                    con_out("\033[1;33m%s\033[0m", lexer->tok.value);
+                    break;
+
+                case TOKEN_INTCONST:
+                case TOKEN_FLOATCONST:
+                    con_out("\033[1;32m%s\033[0m", lexer->tok.value);
+                    break;
+
+                case TOKEN_CHARCONST:
+                case TOKEN_STRINGCONST:
+                    con_out("\033[1;31m%s\033[0m", lexer->tok.value);
+                    break;
+
+                case TOKEN_EOF:
+                case TOKEN_ERROR:
+                case TOKEN_EOL:
+                    /* ignore */
+                    break;
+
+                default:
+                    con_out("%s", lexer->tok.value);
+                    break;
+            };
+        }
+        lex_close(lexer);
+        con_out("\n");
+    }
+
+    /* find it in the last line */
+    if ((peek = strstr(vec_last(read), find))) {
+        space = peek - vec_last(read) + 6; /*% 4d|*/
+    }
+
+    while (space --) con_out(" ");
+    while (len   --) con_out("~");
+
+    con_out((marker) ? "^\n" : "\n"); /* marker */
+
+    /* yes we allocate a whole vector each subsection read */
+    vec_free(read);
+}
+
+static void diagnostic_destroy() {
+    char **lines = NULL;
+    size_t index = 0;
+    size_t item  = 0;
+
+    /*
+     * TODO: traverse the hash table and free from the buckets. Or even
+     * better implement an 'iterator' system for it to enumerate items.
+     * we currently store a vector of strings as "keys" into the hashtable
+     * such that we can erase all allocated data. This is such a waste of
+     * space.
+     */
+    if (!diagnostic_index || !diagnostic_table)
+        return;
+
+    for (; index < vec_size(diagnostic_index); index++) {
+        lines = (char**)util_htget(diagnostic_table, diagnostic_index[index]);
+        for (item = 0; item < vec_size(lines); item++) {
+            mem_d(lines[item]);
+        }
+        vec_free(lines);
+    }
+
+    util_htdel(diagnostic_table);
+    vec_free  (diagnostic_index);
+}
+
+static void diagnostic_calculate(parser_t *parser) {
+    size_t linebeg = 1;
+    size_t linecnt = 1;
+
+    /*
+     * special linebeg/ linecnt offset calculations can be done
+     * here.
+     */  
+
+    diagnostic_feed(parser, linebeg, linecnt, false);
+}
+
 static void parseerror(parser_t *parser, const char *fmt, ...)
 {
-    va_list ap;
+    va_list  ap;
     va_start(ap, fmt);
+
+
+    /*vcompile_error(parser->lex->tok.ctx, data);*/
     vcompile_error(parser->lex->tok.ctx, fmt, ap);
     va_end(ap);
+
+    /* only print when not bailing out */
+    if (!strstr(fmt, "bailing out"))
+        diagnostic_calculate(parser);
 }
 
 /* returns true if it counts as an error */
@@ -5588,7 +5742,11 @@ skipvar:
 
         if (parser->tok != '{') {
             if (parser->tok != '=') {
-                parseerror(parser, "missing semicolon or initializer, got: `%s`", parser_tokval(parser));
+                const char *obtain = parser_tokval(parser);
+                if (!strcmp(obtain, "}"))
+                    parseerror(parser, "missing semicolon");
+                else
+                    parseerror(parser, "missing initializer");
                 break;
             }
 
@@ -6281,6 +6439,8 @@ bool parser_finish(const char *output)
             return false;
         }
     }
+
+    diagnostic_destroy();
 
     ir_builder_delete(ir);
     return retval;

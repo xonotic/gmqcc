@@ -780,7 +780,11 @@ srcdone:
             }
         }
     }
-
+{
+    #define FOO "\xD\xE\xA\xD\xB\xE\xE\xF\xD\xE\xA\xD\xB\xE\xE\xF"
+    char *foo = util_strdup(FOO FOO FOO FOO "hello world!");
+    (void)foo;
+}
 cleanup:
     util_debug("COM", "cleaning ...\n");
     ftepp_finish();
