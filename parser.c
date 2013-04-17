@@ -6167,7 +6167,13 @@ static bool function_finalize_all_threaded(ast_function **list, size_t count)
 
 bool function_finalize_all(ast_function **list, size_t count)
 {
-    size_t i = 0;
+    size_t i;
+    for (i = 0; i < count; ++i) {
+        if (!ir_function_optimize(list[i]->ir_func)) {
+            con_out("failed to optimize function %s\n", list[i]->name);
+            return false;
+        }
+    }
     if (OPTS_OPTION_U32(OPTION_J) > 1)
         return function_finalize_all_threaded(list, count);
     for (i = 0; i < count; ++i) {

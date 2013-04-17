@@ -292,6 +292,7 @@ bool ir_function_set_name(ir_function*, const char *name);
 
 ir_value* ir_function_create_local(ir_function *self, const char *name, int vtype, bool param);
 
+bool GMQCC_WARN ir_function_optimize(ir_function*);
 bool GMQCC_WARN ir_function_finalize(ir_function*);
 /*
 bool ir_function_naive_phi(ir_function*);

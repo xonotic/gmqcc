@@ -317,7 +317,7 @@ ir_builder* ir_builder_new(const char *modulename)
         return NULL;
     }
 
-    self->nil = ir_value_var("nil", store_value, TYPE_NIL);
+    self->nil = ir_value_var("nil", store_global, TYPE_NIL);
     self->nil->cvq = CV_CONST;
 
     self->reserved_va_count = NULL;
@@ -777,10 +777,8 @@ bool ir_function_pass_tailrecursion(ir_function *self)
     return true;
 }
 
-bool ir_function_finalize(ir_function *self)
+bool ir_function_optimize(ir_function *self)
 {
-    size_t i;
-
     if (self->builtin)
         return true;
 
@@ -802,6 +800,15 @@ bool ir_function_finalize(ir_function *self)
         irerror(self->context, "internal error: ir_function_naive_phi failed");
         return false;
     }
+    return true;
+}
+
+bool ir_function_finalize(ir_function *self)
+{
+    size_t i;
+
+    if (self->builtin)
+        return true;
 
     for (i = 0; i < vec_size(self->locals); ++i) {
         ir_value *v = self->locals[i];
