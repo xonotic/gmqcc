@@ -48,6 +48,8 @@ typedef struct parser_s {
     ast_value    **imm_vector;
     size_t         translated;
 
+    ht ht_imm_string;
+
     /* must be deleted first, they reference immediates and values */
     ast_value    **accessors;
 
@@ -254,12 +256,22 @@ static char *parser_strdup(const char *str)
 
 static ast_value* parser_const_string(parser_t *parser, const char *str, bool dotranslate)
 {
-    size_t i;
+    size_t hash = util_hthash(parser->ht_imm_string, str);
     ast_value *out;
+    if ( (out = util_htgeth(parser->ht_imm_string, str, hash)) ) {
+        if (dotranslate && out->name[0] == '#') {
+            char name[32];
+            snprintf(name, sizeof(name), "dotranslate_%lu", (unsigned long)(parser->translated++));
+            ast_value_set_name(out, name);
+        }
+        return out;
+    }
+    /*
     for (i = 0; i < vec_size(parser->imm_string); ++i) {
         if (!strcmp(parser->imm_string[i]->constval.vstring, str))
             return parser->imm_string[i];
     }
+    */
     if (dotranslate) {
         char name[32];
         snprintf(name, sizeof(name), "dotranslate_%lu", (unsigned long)(parser->translated++));
@@ -270,6 +282,7 @@ static ast_value* parser_const_string(parser_t *parser, const char *str, bool do
     out->hasvalue = true;
     out->constval.vstring = parser_strdup(str);
     vec_push(parser->imm_string, out);
+    util_htseth(parser->ht_imm_string, str, hash, out);
     return out;
 }
 
@@ -5943,6 +5956,8 @@ parser_t *parser_create()
 
     parser->aliases = util_htnew(PARSER_HT_SIZE);
 
+    parser->ht_imm_string = util_htnew(512);
+
     /* corrector */
     vec_push(parser->correct_variables, correct_trie_new());
     vec_push(parser->correct_variables_score, NULL);
@@ -6055,6 +6070,7 @@ void parser_cleanup(parser_t *parser)
     vec_free(parser->functions);
     vec_free(parser->imm_vector);
     vec_free(parser->imm_string);
+    util_htdel(parser->ht_imm_string);
     vec_free(parser->imm_float);
     vec_free(parser->globals);
     vec_free(parser->fields);
