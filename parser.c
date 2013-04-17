@@ -6334,6 +6334,12 @@ bool parser_finish(parser_t *parser, const char *output)
     }
     if (OPTS_OPTION_BOOL(OPTION_DUMP))
         ir_builder_dump(ir, con_out);
+
+    if (!ir_builder_prepare(ir)) {
+        con_out("failed to prepare builder for output\n");
+        ir_builder_delete(ir);
+        return false;
+    }
 #if 0
     for (i = 0; i < vec_size(parser->functions); ++i) {
         if (!ir_function_finalize(parser->functions[i]->ir_func)) {

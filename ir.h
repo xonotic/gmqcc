@@ -325,6 +325,9 @@ typedef struct ir_builder_s
     uint32_t      first_common_local;
     uint32_t      first_common_globaltemp;
 
+    /* highest number of parameters */
+    size_t        max_used_params;
+
     const char **filenames;
     qcint       *filestrings;
     /* we cache the #IMMEDIATE string here */
@@ -349,6 +352,7 @@ ir_value* ir_builder_create_field(ir_builder*, const char *name, int vtype);
 
 ir_value* ir_builder_get_va_count(ir_builder*);
 
+bool ir_builder_prepare(ir_builder *self);
 bool ir_builder_generate(ir_builder *self, const char *filename);
 
 void ir_builder_dump(ir_builder*, int (*oprintf)(const char*, ...));

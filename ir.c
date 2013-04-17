@@ -211,7 +211,6 @@ uint16_t type_not_instr[TYPE_COUNT] = {
 };
 
 /* protos */
-static ir_value* ir_gen_extparam_proto(ir_builder *ir);
 static void      ir_gen_extparam      (ir_builder *ir);
 
 /* error functions */
@@ -309,6 +308,7 @@ ir_builder* ir_builder_new(const char *modulename)
     self->max_globaltemps         = 0;
     self->first_common_local      = 0;
     self->max_locals              = 0;
+    self->max_used_params         = 0;
 
     self->str_immediate = 0;
     self->name = NULL;
@@ -1706,8 +1706,14 @@ ir_value* ir_call_value(ir_instr *self)
 
 void ir_call_param(ir_instr* self, ir_value *v)
 {
+    size_t *maxparams, param;
     vec_push(self->params, v);
     vec_push(v->reads, self);
+
+    param = vec_size(self->params);
+    maxparams = &self->owner->owner->owner->max_used_params;
+    if (param > *maxparams)
+        *maxparams = param;
 }
 
 /* binary op related code */
@@ -2182,17 +2188,7 @@ bool ir_function_allocate_locals(ir_function *self)
                 if (param < 8)
                     ir_value_code_setaddr(v, OFS_PARM0 + 3*param);
                 else {
-                    size_t nprotos = vec_size(self->owner->extparam_protos);
-                    ir_value *ep;
-                    param -= 8;
-                    if (nprotos > param)
-                        ep = self->owner->extparam_protos[param];
-                    else
-                    {
-                        ep = ir_gen_extparam_proto(self->owner);
-                        while (++nprotos <= param)
-                            ep = ir_gen_extparam_proto(self->owner);
-                    }
+                    ir_value *ep = self->owner->extparam_protos[param-=8];
                     ir_instr_op(v->writes[0], 0, ep, true);
                     call->params[param+8] = ep;
                 }
@@ -2450,20 +2446,30 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
         if (instr->opcode == INSTR_MUL_VF)
         {
             value = instr->_ops[2];
-            /* the float source will get an additional lifetime */
-            if (ir_value_life_merge(value, instr->eid+1))
-                *changed = true;
-            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1))
-                *changed = true;
+            if (value->store == store_value ||
+                value->store == store_local ||
+                value->store == store_param)
+            {
+                /* the float source will get an additional lifetime */
+                if (ir_value_life_merge(value, instr->eid+1))
+                    *changed = true;
+                if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1))
+                    *changed = true;
+            }
         }
         else if (instr->opcode == INSTR_MUL_FV || instr->opcode == INSTR_LOAD_V)
         {
             value = instr->_ops[1];
-            /* the float source will get an additional lifetime */
-            if (ir_value_life_merge(value, instr->eid+1))
-                *changed = true;
-            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1))
-                *changed = true;
+            if (value->store == store_value ||
+                value->store == store_local ||
+                value->store == store_param)
+            {
+                /* the float source will get an additional lifetime */
+                if (ir_value_life_merge(value, instr->eid+1))
+                    *changed = true;
+                if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1))
+                    *changed = true;
+            }
         }
 
         for (o = 0; o < 3; ++o)
@@ -2499,6 +2505,10 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
         for (p = 0; p < vec_size(instr->phi); ++p)
         {
             value = instr->phi[p].value;
+            if (value->store != store_value &&
+                value->store != store_local &&
+                value->store != store_param)
+                continue;
             if (!vec_ir_value_find(self->living, value, NULL))
                 vec_push(self->living, value);
             /* reading adds the full vector */
@@ -2519,6 +2529,10 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
         for (p = 0; p < vec_size(instr->params); ++p)
         {
             value = instr->params[p];
+            if (value->store != store_value &&
+                value->store != store_local &&
+                value->store != store_param)
+                continue;
             if (!vec_ir_value_find(self->living, value, NULL))
                 vec_push(self->living, value);
             /* reading adds the full vector */
@@ -3569,6 +3583,16 @@ static bool ir_builder_gen_field(ir_builder *self, ir_value *field)
     }
 
     return field->code.globaladdr >= 0;
+}
+
+bool ir_builder_prepare(ir_builder *self)
+{
+    size_t extparams = self->max_used_params;
+    if (extparams > 8) {
+        for (extparams -= 8; extparams; --extparams)
+            ir_gen_extparam_proto(self);
+    }
+    return true;
 }
 
 bool ir_builder_generate(ir_builder *self, const char *filename)
