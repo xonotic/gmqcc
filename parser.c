@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
+#include <pthread.h>
 
 #include "gmqcc.h"
 #include "lexer.h"
@@ -6100,6 +6101,84 @@ void parser_cleanup(parser_t *parser)
     mem_d(parser);
 }
 
+static void function_finalize_worker_do(ast_function **list, size_t count, volatile uint32_t *counter, bool *failure)
+{
+    do {
+        uint32_t idx = util_atomic_xadd32(counter, 1);
+        if (idx >= count) {
+            *counter = count;
+            return;
+        }
+        if (!ir_function_finalize(list[idx]->ir_func)) {
+            con_out("failed to finalize function %s\n", list[idx]->name);
+            *failure = true;
+            return;
+        }
+    } while (true);
+}
+
+typedef struct {
+    ast_function     **list;
+    size_t             count;
+    volatile uint32_t *counter;
+    bool              *failure;
+} function_finalize_worker_data;
+static void* function_finalize_worker(void *_d) {
+    function_finalize_worker_data *d = (function_finalize_worker_data*)_d;
+    function_finalize_worker_do(d->list, d->count, d->counter, d->failure);
+    return NULL;
+}
+
+static bool function_finalize_all_threaded(ast_function **list, size_t count)
+{
+    volatile uint32_t counter = 0;
+    function_finalize_worker_data wd;
+
+    size_t poolsize = OPTS_OPTION_U32(OPTION_J);
+    bool   failure = false;
+    size_t i, j;
+
+    pthread_t *threads;
+
+    if (!list || !count)
+        return true;
+
+    wd.list    = list;
+    wd.count   = count;
+    wd.counter = &counter;
+    wd.failure = &failure;
+
+    threads = (pthread_t*)alloca(poolsize*sizeof(pthread_t));
+
+    for (i = 0; i < poolsize; ++i) {
+        if (pthread_create(threads+i, NULL, &function_finalize_worker, &wd) != 0)
+            break;
+    }
+    if (i < poolsize) {
+        con_out("failed to spawn worker threads\n");
+        for (j = 0; j <= i; ++j)
+            pthread_join(threads[j], NULL);
+        return false;
+    }
+    for (i = 0; i < poolsize; ++i)
+        pthread_join(threads[i], NULL);
+    return !failure;
+}
+
+bool function_finalize_all(ast_function **list, size_t count)
+{
+    size_t i = 0;
+    if (OPTS_OPTION_U32(OPTION_J) > 1)
+        return function_finalize_all_threaded(list, count);
+    for (i = 0; i < count; ++i) {
+        if (!ir_function_finalize(list[i]->ir_func)) {
+            con_out("failed to finalize function %s\n", list[i]->name);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool parser_finish(parser_t *parser, const char *output)
 {
     size_t i;
@@ -6255,6 +6334,7 @@ bool parser_finish(parser_t *parser, const char *output)
     }
     if (OPTS_OPTION_BOOL(OPTION_DUMP))
         ir_builder_dump(ir, con_out);
+#if 0
     for (i = 0; i < vec_size(parser->functions); ++i) {
         if (!ir_function_finalize(parser->functions[i]->ir_func)) {
             con_out("failed to finalize function %s\n", parser->functions[i]->name);
@@ -6262,6 +6342,12 @@ bool parser_finish(parser_t *parser, const char *output)
             return false;
         }
     }
+#else
+    if (!function_finalize_all(parser->functions, vec_size(parser->functions))) {
+        ir_builder_delete(ir);
+        return false;
+    }
+#endif
 
     if (compile_Werrors) {
         con_out("*** there were warnings treated as errors\n");

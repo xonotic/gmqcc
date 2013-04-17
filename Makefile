@@ -10,7 +10,7 @@ CYGWIN  = $(findstring CYGWIN,  $(UNAME))
 MINGW   = $(findstring MINGW32, $(UNAME))
 
 CC     ?= clang
-CFLAGS += -Wall -Wextra -Werror -I. -fno-strict-aliasing -fsigned-char $(OPTIONAL)
+CFLAGS += -Wall -Wextra -Werror -I. -fno-strict-aliasing -fsigned-char -pthread $(OPTIONAL)
 ifneq ($(shell git describe --always 2>/dev/null),)
     CFLAGS += -DGMQCC_GITINFO="\"$(shell git describe --always)\""
 endif
@@ -42,7 +42,7 @@ ifeq ($(track), no)
 	CFLAGS += -DNOTRACK
 endif
 
-OBJ_D = util.o code.o ast.o ir.o conout.o ftepp.o opts.o fs.o utf8.o correct.o
+OBJ_D = util.o code.o ast.o ir.o thread.o conout.o ftepp.o opts.o fs.o utf8.o correct.o
 OBJ_P = util.o fs.o conout.o opts.o pak.o
 OBJ_T = test.o util.o conout.o fs.o
 OBJ_C = main.o lexer.o parser.o fs.o
@@ -177,7 +177,7 @@ $(QCVM): $(OBJ_X)
 	$(CC) -o $@ $^ $(CFLAGS) -lm
 
 $(GMQCC): $(OBJ_C) $(OBJ_D)
-	$(CC) -o $@ $^ $(CFLAGS) -lm
+	$(CC) -o $@ $^ $(CFLAGS) -lm -pthread
 
 $(TESTSUITE): $(OBJ_T)
 	$(CC) -o $@ $^ $(CFLAGS) -lm

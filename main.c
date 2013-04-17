@@ -212,6 +212,11 @@ static bool options_parse(int argc, char **argv) {
                 OPTS_OPTION_U16 (OPTION_FORCED_CRC) = strtol(argarg, NULL, 0);
                 continue;
             }
+            if (options_long_gcc("jobs", &argc, &argv, &argarg)) {
+
+                OPTS_OPTION_U32 (OPTION_J) = strtol(argarg, NULL, 0);
+                continue;
+            }
             if (options_long_gcc("redirout", &argc, &argv, &redirout)) {
                 con_change(redirout, redirerr);
                 continue;
@@ -457,6 +462,14 @@ static bool options_parse(int argc, char **argv) {
                     }
                     item.filename = argarg;
                     vec_push(items, item);
+                    break;
+
+                case 'j':
+                    if (!options_witharg(&argc, &argv, &argarg)) {
+                        con_out("option -j requires a parameter\n");
+                        return false;
+                    }
+                    OPTS_OPTION_U32 (OPTION_J) = strtol(argarg, NULL, 0);
                     break;
 
                 case '-':
