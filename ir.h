@@ -46,6 +46,7 @@ typedef struct ir_value_s {
     int       cvq;
     uint32_t  flags;
 
+    bool      untracked;
     struct ir_instr_s **reads;
     struct ir_instr_s **writes;
 

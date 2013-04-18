@@ -319,6 +319,7 @@ ir_builder* ir_builder_new(const char *modulename)
 
     self->nil = ir_value_var("nil", store_global, TYPE_NIL);
     self->nil->cvq = CV_CONST;
+    self->nil->untracked = true;
 
     self->reserved_va_count = NULL;
 
@@ -422,9 +423,11 @@ ir_value* ir_builder_create_global(ir_builder *self, const char *name, int vtype
 
 ir_value* ir_builder_get_va_count(ir_builder *self)
 {
-    if (self->reserved_va_count)
-        return self->reserved_va_count;
-    return (self->reserved_va_count = ir_builder_create_global(self, "reserved:va_count", TYPE_FLOAT));
+    if (!self->reserved_va_count) {
+        self->reserved_va_count = ir_builder_create_global(self, "reserved:va_count", TYPE_FLOAT);
+        self->reserved_va_count->untracked = true;
+    }
+    return self->reserved_va_count;
 }
 
 ir_value* ir_builder_get_field(ir_builder *self, const char *name)
@@ -976,6 +979,8 @@ void ir_instr_delete(ir_instr *self)
      */
     for (i = 0; i < vec_size(self->phi); ++i) {
         size_t idx;
+        if (self->phi[i].value->untracked)
+            continue;
         if (vec_ir_instr_find(self->phi[i].value->writes, self, &idx))
             vec_remove(self->phi[i].value->writes, idx, 1);
         if (vec_ir_instr_find(self->phi[i].value->reads, self, &idx))
@@ -984,6 +989,8 @@ void ir_instr_delete(ir_instr *self)
     vec_free(self->phi);
     for (i = 0; i < vec_size(self->params); ++i) {
         size_t idx;
+        if (self->params[i]->untracked)
+            continue;
         if (vec_ir_instr_find(self->params[i]->writes, self, &idx))
             vec_remove(self->params[i]->writes, idx, 1);
         if (vec_ir_instr_find(self->params[i]->reads, self, &idx))
@@ -998,14 +1005,15 @@ void ir_instr_delete(ir_instr *self)
 
 bool ir_instr_op(ir_instr *self, int op, ir_value *v, bool writing)
 {
-    if (self->_ops[op]) {
+    ir_value *old = self->_ops[op];
+    if (old && !old->untracked) {
         size_t idx;
-        if (writing && vec_ir_instr_find(self->_ops[op]->writes, self, &idx))
-            vec_remove(self->_ops[op]->writes, idx, 1);
-        else if (vec_ir_instr_find(self->_ops[op]->reads, self, &idx))
-            vec_remove(self->_ops[op]->reads, idx, 1);
+        if (writing && vec_ir_instr_find(old->writes, self, &idx))
+            vec_remove(old->writes, idx, 1);
+        else if (vec_ir_instr_find(old->reads, self, &idx))
+            vec_remove(old->reads, idx, 1);
     }
-    if (v) {
+    if (v && !v->untracked) {
         if (writing)
             vec_push(v->writes, self);
         else
@@ -1044,8 +1052,9 @@ ir_value* ir_value_var(const char *name, int storetype, int vtype)
     self->store = storetype;
     self->flags = 0;
 
-    self->reads  = NULL;
-    self->writes = NULL;
+    self->reads     = NULL;
+    self->writes    = NULL;
+    self->untracked = false;
 
     self->cvq          = CV_NONE;
     self->hasvalue     = false;
@@ -1652,7 +1661,8 @@ void ir_phi_add(ir_instr* self, ir_block *b, ir_value *v)
 
     pe.value = v;
     pe.from = b;
-    vec_push(v->reads, self);
+    if (!v->untracked)
+        vec_push(v->reads, self);
     vec_push(self->phi, pe);
 }
 
@@ -1704,7 +1714,8 @@ void ir_call_param(ir_instr* self, ir_value *v)
 {
     size_t *maxparams, param;
     vec_push(self->params, v);
-    vec_push(v->reads, self);
+    if (!v->untracked)
+        vec_push(v->reads, self);
 
     param = vec_size(self->params);
     maxparams = &self->owner->owner->owner->max_used_params;
@@ -3082,6 +3093,7 @@ static ir_value* ir_gen_extparam_proto(ir_builder *ir)
 
     snprintf(name, sizeof(name), "EXTPARM#%i", (int)(vec_size(ir->extparam_protos)));
     global = ir_value_var(name, store_global, TYPE_VECTOR);
+    global->untracked = true;
 
     vec_push(ir->extparam_protos, global);
     return global;
