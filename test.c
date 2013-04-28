@@ -20,7 +20,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include "gmqcc.h"
+#include "base.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -692,7 +692,6 @@ bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
             char            *qcflags = NULL;
             task_t           task;
 
-            util_debug("TEST", "compiling task template: %s/%s\n", curdir, files->d_name);
             found ++;
             if (!tmpl) {
                 con_err("error compiling task template: %s\n", files->d_name);
@@ -803,8 +802,6 @@ bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
                 continue;
             }
 
-            util_debug("TEST", "executing test: `%s` [%s]\n", tmpl->description, buf);
-
             /*
              * Open up some file desciptors for logging the stdout/stderr
              * to our own.
@@ -826,11 +823,6 @@ bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
             vec_push(task_tasks, task);
         }
     }
-
-    util_debug("TEST", "compiled %d task template files out of %d\n",
-        vec_size(task_tasks),
-        found
-    );
 
     fs_dir_close(dir);
     return success;
@@ -855,8 +847,6 @@ void task_precleanup(const char *curdir) {
             util_snprintf(buffer, sizeof(buffer), "%s/%s", curdir, files->d_name);
             if (remove(buffer))
                 con_err("error removing temporary file: %s\n", buffer);
-            else
-                util_debug("TEST", "removed temporary file: %s\n", buffer);
         }
     }
 
@@ -887,12 +877,8 @@ void task_destroy(void) {
         if (task_tasks[i].compiled || !strcmp(task_tasks[i].tmpl->proceduretype, "-fail")) {
             if (remove(task_tasks[i].stdoutlogfile))
                 con_err("error removing stdout log file: %s\n", task_tasks[i].stdoutlogfile);
-            else
-                util_debug("TEST", "removed stdout log file: %s\n", task_tasks[i].stdoutlogfile);
             if (remove(task_tasks[i].stderrlogfile))
                 con_err("error removing stderr log file: %s\n", task_tasks[i].stderrlogfile);
-            else
-                util_debug("TEST", "removed stderr log file: %s\n", task_tasks[i].stderrlogfile);
 
             remove(task_tasks[i].tmpl->tempfilename);
         }
@@ -936,11 +922,6 @@ bool task_trymatch(task_template_t *tmpl, char ***line) {
                 tmpl->tempfilename
             );
         }
-
-        util_debug("TEST", "executing qcvm: `%s` [%s]\n",
-            tmpl->description,
-            buffer
-        );
 
         execute = popen(buffer, "r");
         if (!execute)
@@ -1054,7 +1035,6 @@ void task_schedualize(size_t *pad) {
 
         con_out("test #%u %*s", i + 1, strlen(space[0]) - strlen(space[1]), "");
 
-        util_debug("TEST", "executing task: %d: %s\n", i, task_tasks[i].tmpl->description);
         /*
          * Generate a task from thin air if it requires execution in
          * the QCVM.
@@ -1321,8 +1301,6 @@ int main(int argc, char **argv) {
     }
     con_change(redirout, redirerr);
     succeed = test_perform("tests", defs);
-    util_meminfo();
-
 
     return (succeed) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

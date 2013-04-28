@@ -25,7 +25,7 @@
 #include <stdarg.h>
 #include <math.h>
 
-#include "gmqcc.h"
+#include "base.h"
 #include "lexer.h"
 #include "ast.h"
 

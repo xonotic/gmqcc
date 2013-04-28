@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include "gmqcc.h"
+#include "base.h"
 unsigned int opts_optimizationcount[COUNT_OPTIMIZATIONS];
 opts_cmd_t   opts; /* command lien options */
 

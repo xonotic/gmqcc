@@ -23,240 +23,78 @@
  */
 #include <stdarg.h>
 #include <errno.h>
-#include "gmqcc.h"
+#include "base.h"
 
-/* TODO: remove globals ... */
-static uint64_t mem_ab = 0;
-static uint64_t mem_db = 0;
-static uint64_t mem_at = 0;
-static uint64_t mem_dt = 0;
-static uint64_t mem_pk = 0;
-static uint64_t mem_hw = 0;
+static bool    mem_provided                 = false;
+static void *(*mem_malloc)(size_t)          = NULL;
+static void *(*mem_realloc)(void *, size_t) = NULL;
+static void  (*mem_free)(void *)            = NULL;
 
-struct memblock_t {
-    const char  *file;
-    unsigned int line;
-    size_t       byte;
-    struct memblock_t *next;
-    struct memblock_t *prev;
-};
+bool gmqcc_global_setmemory (
+    void *(*malloc_impl) (size_t),
+    void *(*realloc_impl)(void *, size_t),
+    void  (*free_impl)   (void *)
+) {
+    if (!malloc_impl || !realloc_impl || !free_impl)
+        return false;
 
-#define PEAK_MEM             \
-    do {                     \
-        if (mem_hw > mem_pk) \
-            mem_pk = mem_hw; \
-    } while (0)
+    mem_malloc   = malloc_impl;
+    mem_realloc  = realloc_impl;
+    mem_free     = free_impl;
+    mem_provided = true;
 
-static struct memblock_t *mem_start = NULL;
-
-void *util_memory_a(size_t byte, unsigned int line, const char *file) {
-    struct memblock_t *info = (struct memblock_t*)malloc(sizeof(struct memblock_t) + byte);
-    void              *data = (void*)(info+1);
-    if (!info) return NULL;
-    info->line = line;
-    info->byte = byte;
-    info->file = file;
-    info->prev = NULL;
-    info->next = mem_start;
-    if (mem_start)
-        mem_start->prev = info;
-    mem_start = info;
-
-    mem_at++;
-    mem_ab += info->byte;
-    mem_hw += info->byte;
-
-    PEAK_MEM;
-
-    return data;
+    return true;
 }
 
-void util_memory_d(void *ptrn) {
-    struct memblock_t *info = NULL;
-
-    if (!ptrn) return;
-    info = ((struct memblock_t*)ptrn - 1);
-
-    mem_db += info->byte;
-    mem_hw -= info->byte;
-    mem_dt++;
-
-    if (info->prev)
-        info->prev->next = info->next;
-    if (info->next)
-        info->next->prev = info->prev;
-    if (info == mem_start)
-        mem_start = info->next;
-
-    free(info);
+void *util_mem_a(size_t bytes) {
+    return (mem_provided)
+        ? mem_malloc(bytes)
+        : malloc    (bytes);
 }
 
-void *util_memory_r(void *ptrn, size_t byte, unsigned int line, const char *file) {
-    struct memblock_t *oldinfo = NULL;
-
-    struct memblock_t *newinfo;
-
-    if (!ptrn)
-        return util_memory_a(byte, line, file);
-    if (!byte) {
-        util_memory_d(ptrn);
-        return NULL;
-    }
-
-    oldinfo = ((struct memblock_t*)ptrn - 1);
-    newinfo = ((struct memblock_t*)malloc(sizeof(struct memblock_t) + byte));
-
-    /* new data */
-    if (!newinfo) {
-        util_memory_d(oldinfo+1);
-        return NULL;
-    }
-
-    /* copy old */
-    memcpy(newinfo+1, oldinfo+1, oldinfo->byte);
-
-    /* free old */
-    if (oldinfo->prev)
-        oldinfo->prev->next = oldinfo->next;
-    if (oldinfo->next)
-        oldinfo->next->prev = oldinfo->prev;
-    if (oldinfo == mem_start)
-        mem_start = oldinfo->next;
-
-    /* fill info */
-    newinfo->line = line;
-    newinfo->byte = byte;
-    newinfo->file = file;
-    newinfo->prev = NULL;
-    newinfo->next = mem_start;
-    if (mem_start)
-        mem_start->prev = newinfo;
-    mem_start = newinfo;
-
-    mem_ab -= oldinfo->byte;
-    mem_hw -= oldinfo->byte;
-    mem_ab += newinfo->byte;
-    mem_hw += newinfo->byte;
-
-    PEAK_MEM;
-
-    free(oldinfo);
-
-    return newinfo+1;
+void *util_mem_r(void *ptr, size_t bytes) {
+    return (mem_provided)
+        ? mem_realloc(ptr, bytes)
+        : realloc    (ptr, bytes);
 }
 
-static void util_dumpmem(struct memblock_t *memory, uint16_t cols) {
-    uint32_t i, j;
-    for (i = 0; i < memory->byte + ((memory->byte % cols) ? (cols - memory->byte % cols) : 0); i++) {
-        if (i % cols == 0)    con_out("    0x%06X: ", i);
-        if (i < memory->byte) con_out("%02X "   , 0xFF & ((char*)(memory + 1))[i]);
-        else                  con_out("    ");
-
-        if ((uint16_t)(i % cols) == (cols - 1)) {
-            for (j = i - (cols - 1); j <= i; j++) {
-                con_out("%c",
-                    (j >= memory->byte)
-                        ? ' '
-                        : (isprint(((char*)(memory + 1))[j]))
-                            ? 0xFF & ((char*)(memory + 1)) [j]
-                            : '.'
-                );
-            }
-            con_out("\n");
-        }
-    }
+void util_mem_f(void *ptr) {
+    if (mem_provided) mem_free(ptr);
+    else              free    (ptr);
 }
-
-void util_meminfo() {
-    struct memblock_t *info;
-
-
-    if (OPTS_OPTION_BOOL(OPTION_DEBUG)) {
-        for (info = mem_start; info; info = info->next) {
-            con_out("lost: %u (bytes) at %s:%u\n",
-                info->byte,
-                info->file,
-                info->line);
-
-            util_dumpmem(info, OPTS_OPTION_U16(OPTION_MEMDUMPCOLS));
-        }
-    }
-
-    if (OPTS_OPTION_BOOL(OPTION_DEBUG) ||
-        OPTS_OPTION_BOOL(OPTION_MEMCHK)) {
-        con_out("Memory information:\n\
-            Total allocations:   %llu\n\
-            Total deallocations: %llu\n\
-            Total allocated:     %f (MB)\n\
-            Total deallocated:   %f (MB)\n\
-            Total peak memory:   %f (MB)\n\
-            Total leaked memory: %f (MB) in %llu allocations\n",
-                mem_at,
-                mem_dt,
-                (float)(mem_ab)           / 1048576.0f,
-                (float)(mem_db)           / 1048576.0f,
-                (float)(mem_pk)           / 1048576.0f,
-                (float)(mem_ab -  mem_db) / 1048576.0f,
-
-                /* could be more clever */
-                (mem_at -  mem_dt)
-        );
-    }
-}
+    
 
 /*
  * Some string utility functions, because strdup uses malloc, and we want
  * to track all memory (without replacing malloc).
  */
-char *_util_Estrdup(const char *s, const char *file, size_t line) {
+char *util_strdup(const char *s) {
     size_t  len = 0;
     char   *ptr = NULL;
-
-    /* in case of -DNOTRACK */
-    (void)file;
-    (void)line;
 
     if (!s)
         return NULL;
 
-    if ((len = strlen(s)) && (ptr = (char*)mem_af(len+1, line, file))) {
+    if ((len = strlen(s)) && (ptr = (char*)util_mem_a(len+1))) {
         memcpy(ptr, s, len);
         ptr[len] = '\0';
     }
     return ptr;
 }
 
-char *_util_Estrdup_empty(const char *s, const char *file, size_t line) {
+char *util_strdupe(const char *s) {
     size_t  len = 0;
     char   *ptr = NULL;
-
-    /* in case of -DNOTRACK */
-    (void)file;
-    (void)line;
 
     if (!s)
         return NULL;
 
     len = strlen(s);
-    if ((ptr = (char*)mem_af(len+1, line, file))) {
+    if ((ptr = (char*)util_mem_a(len+1))) {
         memcpy(ptr, s, len);
         ptr[len] = '\0';
     }
     return ptr;
-}
-
-void util_debug(const char *area, const char *ms, ...) {
-    va_list  va;
-    if (!OPTS_OPTION_BOOL(OPTION_DEBUG))
-        return;
-
-    if (!strcmp(area, "MEM") && !OPTS_OPTION_BOOL(OPTION_MEMCHK))
-        return;
-
-    va_start(va, ms);
-    con_out ("[%s] ", area);
-    con_vout(ms, va);
-    va_end  (va);
 }
 
 /*

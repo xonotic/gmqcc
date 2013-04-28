@@ -20,7 +20,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include "gmqcc.h"
+#include "base.h"
 
 /*
  * The PAK format uses a FOURCC concept for storing the magic ident within
@@ -552,7 +552,6 @@ int main(int argc, char **argv) {
         /* not possible */
         pak_close(pak);
         vec_free(files);
-        util_meminfo();
         return EXIT_SUCCESS;
     }
 
@@ -575,7 +574,5 @@ int main(int argc, char **argv) {
     pak_close(pak);
     vec_free(files);
 
-
-    util_meminfo();
     return EXIT_SUCCESS;
 }

@@ -23,7 +23,7 @@
  */
 #include <time.h>
 #include <sys/stat.h>
-#include "gmqcc.h"
+#include "base.h"
 #include "lexer.h"
 
 #define HT_MACROS 1024

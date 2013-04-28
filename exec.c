@@ -27,7 +27,7 @@
 #include <string.h>
 #include <stdarg.h>
 
-#include "gmqcc.h"
+#include "base.h"
 
 static void loaderror(const char *fmt, ...)
 {

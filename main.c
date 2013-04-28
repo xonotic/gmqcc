@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include "gmqcc.h"
+#include "base.h"
 #include "lexer.h"
 #include <time.h>
 
@@ -639,8 +639,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    util_debug("COM", "starting ...\n");
-
     /* add macros */
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY) || OPTS_FLAG(FTEPP)) {
         for (itr = 0; itr < vec_size(ppems); itr++) {
@@ -779,7 +777,6 @@ srcdone:
     }
 
 cleanup:
-    util_debug("COM", "cleaning ...\n");
     if (ftepp)
         ftepp_finish(ftepp);
     con_close();
@@ -794,6 +791,5 @@ cleanup:
         mem_d((void*)operators);
 
     lex_cleanup();
-    util_meminfo();
     return retval;
 }

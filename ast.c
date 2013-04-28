@@ -25,7 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "gmqcc.h"
+#include "base.h"
 #include "ast.h"
 
 #define ast_instantiate(T, ctx, destroyfn)                          \
