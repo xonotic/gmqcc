@@ -23,6 +23,7 @@
  */
 #include "base.h"
 #include "lexer.h"
+#include "gmqcc.h"
 #include <time.h>
 
 /* TODO: cleanup this whole file .. it's a fuckign mess */
@@ -549,7 +550,8 @@ int main(int argc, char **argv) {
     bool            progs_src        = false;
     FILE            *outfile         = NULL;
     struct parser_s *parser          = NULL;
-    struct ftepp_s  *ftepp           = NULL;
+
+    struct gmqcc_preprocess_s  *ftepp           = NULL;
 
     app_name = argv[0];
     con_init ();
@@ -632,7 +634,7 @@ int main(int argc, char **argv) {
     }
 
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY) || OPTS_FLAG(FTEPP)) {
-        if (!(ftepp = ftepp_create())) {
+        if (!(ftepp = gmqcc_preprocess_create())) {
             con_err("failed to initialize parser\n");
             retval = 1;
             goto cleanup;
@@ -642,7 +644,7 @@ int main(int argc, char **argv) {
     /* add macros */
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY) || OPTS_FLAG(FTEPP)) {
         for (itr = 0; itr < vec_size(ppems); itr++) {
-            ftepp_add_macro(ftepp, ppems[itr].name, ppems[itr].value);
+            gmqcc_preprocess_addmacro(ftepp, ppems[itr].name, ppems[itr].value);
             mem_d(ppems[itr].name);
 
             /* can be null */
@@ -716,30 +718,30 @@ srcdone:
 
             if (OPTS_OPTION_BOOL(OPTION_PP_ONLY)) {
                 const char *out;
-                if (!ftepp_preprocess_file(ftepp, items[itr].filename)) {
+                if (!gmqcc_preprocess_file(ftepp, items[itr].filename)) {
                     retval = 1;
                     goto cleanup;
                 }
-                out = ftepp_get(ftepp);
+                out = gmqcc_preprocess_get(ftepp);
                 if (out)
                     fs_file_printf(outfile, "%s", out);
-                ftepp_flush(ftepp);
+                gmqcc_preprocess_flush(ftepp);
             }
             else {
                 if (OPTS_FLAG(FTEPP)) {
                     const char *data;
-                    if (!ftepp_preprocess_file(ftepp, items[itr].filename)) {
+                    if (!gmqcc_preprocess_file(ftepp, items[itr].filename)) {
                         retval = 1;
                         goto cleanup;
                     }
-                    data = ftepp_get(ftepp);
+                    data = gmqcc_preprocess_get(ftepp);
                     if (vec_size(data)) {
                         if (!parser_compile_string(parser, items[itr].filename, data, vec_size(data))) {
                             retval = 1;
                             goto cleanup;
                         }
                     }
-                    ftepp_flush(ftepp);
+                    gmqcc_preprocess_flush(ftepp);
                 }
                 else {
                     if (!parser_compile_file(parser, items[itr].filename)) {
@@ -755,7 +757,7 @@ srcdone:
             }
         }
 
-        ftepp_finish(ftepp);
+        gmqcc_preprocess_destroy(ftepp);
         ftepp = NULL;
         if (!OPTS_OPTION_BOOL(OPTION_PP_ONLY)) {
             if (!parser_finish(parser, OPTS_OPTION_STR(OPTION_OUTPUT))) {
@@ -778,7 +780,7 @@ srcdone:
 
 cleanup:
     if (ftepp)
-        ftepp_finish(ftepp);
+        gmqcc_preprocess_destroy(ftepp);
     con_close();
     vec_free(items);
     vec_free(ppems);

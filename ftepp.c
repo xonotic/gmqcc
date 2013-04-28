@@ -57,7 +57,7 @@ typedef struct {
     pptoken **output;
 } ppmacro;
 
-typedef struct ftepp_s {
+typedef struct gmqcc_preprocess_s {
     lex_file    *lex;
     int          token;
     unsigned int errors;
@@ -81,7 +81,7 @@ static uint32_t ftepp_predef_countval = 0;
 static uint32_t ftepp_predef_randval  = 0;
 
 /* __DATE__ */
-char *ftepp_predef_date(lex_file *context) {
+static char *ftepp_predef_date(lex_file *context) {
     struct tm *itime = NULL;
     time_t     rtime;
     char      *value = (char*)mem_a(82);
@@ -104,7 +104,7 @@ char *ftepp_predef_date(lex_file *context) {
 }
 
 /* __TIME__ */
-char *ftepp_predef_time(lex_file *context) {
+static char *ftepp_predef_time(lex_file *context) {
     struct tm *itime = NULL;
     time_t     rtime;
     char      *value = (char*)mem_a(82);
@@ -127,13 +127,13 @@ char *ftepp_predef_time(lex_file *context) {
 }
 
 /* __LINE__ */
-char *ftepp_predef_line(lex_file *context) {
+static char *ftepp_predef_line(lex_file *context) {
     char   *value;
     util_asprintf(&value, "%d", (int)context->line);
     return value;
 }
 /* __FILE__ */
-char *ftepp_predef_file(lex_file *context) {
+static char *ftepp_predef_file(lex_file *context) {
     size_t  length = strlen(context->name) + 3; /* two quotes and a terminator */
     char   *value  = (char*)mem_a(length);
     util_snprintf(value, length, "\"%s\"", context->name);
@@ -149,7 +149,7 @@ char *ftepp_predef_counterlast(lex_file *context) {
     return value;
 }
 /* __COUNTER__ */
-char *ftepp_predef_counter(lex_file *context) {
+static char *ftepp_predef_counter(lex_file *context) {
     char   *value;
     ftepp_predef_countval ++;
     util_asprintf(&value, "%u", ftepp_predef_countval);
@@ -158,7 +158,7 @@ char *ftepp_predef_counter(lex_file *context) {
     return value;
 }
 /* __RANDOM__ */
-char *ftepp_predef_random(lex_file *context) {
+static char *ftepp_predef_random(lex_file *context) {
     char  *value;
     ftepp_predef_randval = (util_rand() % 0xFF) + 1;
     util_asprintf(&value, "%u", ftepp_predef_randval);
@@ -167,7 +167,7 @@ char *ftepp_predef_random(lex_file *context) {
     return value;
 }
 /* __RANDOM_LAST__ */
-char *ftepp_predef_randomlast(lex_file *context) {
+static char *ftepp_predef_randomlast(lex_file *context) {
     char   *value;
     util_asprintf(&value, "%u", ftepp_predef_randval);
 
@@ -175,7 +175,7 @@ char *ftepp_predef_randomlast(lex_file *context) {
     return value;
 }
 /* __TIMESTAMP__ */
-char *ftepp_predef_timestamp(lex_file *context) {
+static char *ftepp_predef_timestamp(lex_file *context) {
     struct stat finfo;
     char       *find;
     char       *value;
@@ -1779,7 +1779,9 @@ static bool ftepp_preprocess_done(ftepp_t *ftepp)
     return retval;
 }
 
-bool ftepp_preprocess_file(ftepp_t *ftepp, const char *filename)
+void gmqcc_preprocess_adddefine(ftepp_t *ftepp, const char *source, const char *name);
+
+bool gmqcc_preprocess_file(ftepp_t *ftepp, const char *filename)
 {
     ftepp->lex = lex_open(filename);
     ftepp->itemname = util_strdup(filename);
@@ -1792,9 +1794,9 @@ bool ftepp_preprocess_file(ftepp_t *ftepp, const char *filename)
     return ftepp_preprocess_done(ftepp);
 }
 
-bool ftepp_preprocess_string(ftepp_t *ftepp, const char *name, const char *str)
+bool gmqcc_preprocess_string(ftepp_t *ftepp, const char *name, const char *str)
 {
-    ftepp->lex = lex_open_string(str, strlen(str), name);
+    ftepp->lex      = lex_open_string(str, strlen(str), name);
     ftepp->itemname = util_strdup(name);
     if (!ftepp->lex) {
         con_out("failed to create lexer for string \"%s\"\n", name);
@@ -1806,12 +1808,12 @@ bool ftepp_preprocess_string(ftepp_t *ftepp, const char *name, const char *str)
 }
 
 
-void ftepp_add_macro(ftepp_t *ftepp, const char *name, const char *value) {
+void gmqcc_preprocess_addmacro(ftepp_t *ftepp, const char *name, const char *value) {
     char *create = NULL;
 
     /* use saner path for empty macros */
     if (!value) {
-        ftepp_add_define(ftepp, "__builtin__", name);
+        gmqcc_preprocess_adddefine(ftepp, "__builtin__", name);
         return;
     }
 
@@ -1821,11 +1823,11 @@ void ftepp_add_macro(ftepp_t *ftepp, const char *name, const char *value) {
     vec_upload(create, value, strlen(value));
     vec_push  (create, 0);
 
-    ftepp_preprocess_string(ftepp, "__builtin__", create);
+    gmqcc_preprocess_string(ftepp, "__builtin__", create);
     vec_free  (create);
 }
 
-ftepp_t *ftepp_create()
+ftepp_t *gmqcc_preprocess_create(void)
 {
     ftepp_t *ftepp;
     char minor[32];
@@ -1839,9 +1841,9 @@ ftepp_t *ftepp_create()
     memset(major, 0, sizeof(major));
 
     /* set the right macro based on the selected standard */
-    ftepp_add_define(ftepp, NULL, "GMQCC");
+    gmqcc_preprocess_adddefine(ftepp, NULL, "GMQCC");
     if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_FTEQCC) {
-        ftepp_add_define(ftepp, NULL, "__STD_FTEQCC__");
+        gmqcc_preprocess_adddefine(ftepp, NULL, "__STD_FTEQCC__");
         /* 1.00 */
         major[0] = '"';
         major[1] = '1';
@@ -1851,15 +1853,15 @@ ftepp_t *ftepp_create()
         minor[1] = '0';
         minor[2] = '"';
     } else if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_GMQCC) {
-        ftepp_add_define(ftepp, NULL, "__STD_GMQCC__");
+        gmqcc_preprocess_adddefine(ftepp, NULL, "__STD_GMQCC__");
         util_snprintf(major, 32, "\"%d\"", GMQCC_VERSION_MAJOR);
         util_snprintf(minor, 32, "\"%d\"", GMQCC_VERSION_MINOR);
     } else if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCCX) {
-        ftepp_add_define(ftepp, NULL, "__STD_QCCX__");
+        gmqcc_preprocess_adddefine(ftepp, NULL, "__STD_QCCX__");
         util_snprintf(major, 32, "\"%d\"", GMQCC_VERSION_MAJOR);
         util_snprintf(minor, 32, "\"%d\"", GMQCC_VERSION_MINOR);
     } else if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC) {
-        ftepp_add_define(ftepp, NULL, "__STD_QCC__");
+        gmqcc_preprocess_adddefine(ftepp, NULL, "__STD_QCC__");
         /* 1.0 */
         major[0] = '"';
         major[1] = '1';
@@ -1870,19 +1872,19 @@ ftepp_t *ftepp_create()
         minor[2] = '"';
     }
 
-    ftepp_add_macro(ftepp, "__STD_VERSION_MINOR__", minor);
-    ftepp_add_macro(ftepp, "__STD_VERSION_MAJOR__", major);
+    gmqcc_preprocess_addmacro(ftepp, "__STD_VERSION_MINOR__", minor);
+    gmqcc_preprocess_addmacro(ftepp, "__STD_VERSION_MAJOR__", major);
 
     /*
      * We're going to just make __NULL__ nil, which works for 60% of the
      * cases of __NULL_ for fteqcc.
      */
-    ftepp_add_macro(ftepp, "__NULL__", "nil");
+    gmqcc_preprocess_addmacro(ftepp, "__NULL__", "nil");
 
     return ftepp;
 }
 
-void ftepp_add_define(ftepp_t *ftepp, const char *source, const char *name)
+void gmqcc_preprocess_adddefine(ftepp_t *ftepp, const char *source, const char *name)
 {
     ppmacro *macro;
     lex_ctx ctx = { "__builtin__", 0 };
@@ -1892,18 +1894,15 @@ void ftepp_add_define(ftepp_t *ftepp, const char *source, const char *name)
     util_htset(ftepp->macros, name, macro);
 }
 
-const char *ftepp_get(ftepp_t *ftepp)
-{
+const char *gmqcc_preprocess_get(ftepp_t *ftepp) {
     return ftepp->output_string;
 }
 
-void ftepp_flush(ftepp_t *ftepp)
-{
+void gmqcc_preprocess_flush(ftepp_t *ftepp) {
     ftepp_flush_do(ftepp);
 }
 
-void ftepp_finish(ftepp_t *ftepp)
-{
+void gmqcc_preprocess_destroy(ftepp_t *ftepp) {
     if (!ftepp)
         return;
     ftepp_delete(ftepp);

@@ -40,10 +40,6 @@ else
 	endif
 endif
 
-ifeq ($(track), no)
-	CFLAGS += -DNOTRACK
-endif
-
 OBJ_D = util.o code.o ast.o ir.o conout.o ftepp.o opts.o fs.o utf8.o correct.o
 OBJ_P = util.o fs.o conout.o opts.o pak.o
 OBJ_T = test.o util.o conout.o fs.o
@@ -250,6 +246,6 @@ utf8.o: base.h opts.def
 correct.o: base.h opts.def
 pak.o: base.h opts.def
 test.o: base.h opts.def
-main.o: base.h opts.def lexer.h
+main.o: base.h opts.def lexer.h gmqcc.h
 lexer.o: base.h opts.def lexer.h
 parser.o: base.h opts.def lexer.h ast.h ir.h intrin.h

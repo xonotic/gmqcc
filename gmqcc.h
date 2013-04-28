@@ -28,6 +28,12 @@ extern "C" {
 #endif /*! __cplusplus */
 
 /*
+ * Forward declare everything since these are `private` implementations
+ * that the user shouldn't have information of.
+ */
+struct gmqcc_preprocess_s;
+
+/*
  * Function: gmqcc_global_setmemory
  *  Set implementations for dynamic memory manipulation.
  *
@@ -50,6 +56,114 @@ bool gmqcc_global_setmemory (
     void  (*free_impl)   (void *)
 );
 
+/*
+ * Function: gmqcc_preprocess_create
+ *  Creates a preprocessor context
+ *
+ * Returns:
+ *  Preprocessor context on success, NULL otherwise
+ */
+struct gmqcc_preprocess_s *gmqcc_preprocess_create(void);
+
+/*
+ * Function: gmqcc_preprocess_file
+ *  Preprocesses a file for a given preprocessor context
+ *
+ * Parameters:
+ *  pp       - Pointer to a preprocessor context
+ *  filename - Filename as string to be opened and preprocessed
+ *
+ * Returns:
+ *  true on success, false otherwise.
+ */     
+bool gmqcc_preprocess_file(
+    struct gmqcc_preprocess_s *pp,
+    const char                *filename
+);
+
+/*
+ * Function: gmqcc_preprocess_string
+ *  Preprocesses a string for a given preprocessor context
+ *
+ * Parameters:
+ *  pp   - Pointer to a preprocessor context
+ *  name - Name for the given string (used in error reporting)
+ *  str  - String to be preprocessed
+ *
+ * Returns:
+ *  true on success, false otherwise.
+ */      
+bool gmqcc_preprocess_string   (
+    struct gmqcc_preprocess_s *pp,
+    const char                *name,
+    const char                *str
+);
+
+/*
+ * Function: gmqcc_preprocess_adddefine
+ *  Defines a macro for a given preprocessor context
+ *
+ * Parameters:
+ *  pp    - Pointer to a preprocessor context
+ *  ident - Identifier for the given definition (used in error reporting)
+ *  name  - Name of macro to define
+ */ 
+void gmqcc_preprocess_adddefine(
+    struct gmqcc_preprocess_s *pp,
+    const char                *ident,
+    const char                *name
+);
+
+/*
+ * Function: gmqcc_preprocess_addmacro
+ *  Defines a macro with a value for a given preprocessor context
+ *
+ * Parameters:
+ *  pp    - Pointer to a preprocessor context
+ *  name  - Name of the macro to define
+ *  value - Value of the macro
+ */ 
+void gmqcc_preprocess_addmacro(
+    struct gmqcc_preprocess_s *pp,
+    const char                *name,
+    const char                *value
+);
+
+/*
+ * Function: gmqcc_preprocess_get
+ *  Get preprocessed data as string
+ *
+ * Parameters:
+ *  pp - Pointer to preprocessor context
+ *
+ * Returns:
+ *  const string of the preprocessed contents.
+ */        
+const char *gmqcc_preprocess_get(
+    struct gmqcc_preprocess_s *pp
+);
+
+/*
+ * Function: gmqcc_preprocess_flush
+ *  Flush contents to be preprocessed
+ *
+ * Parameters:
+ *  pp - Pointer to preprocessor context
+ */     
+void gmqcc_preprocess_flush(
+    struct gmqcc_preprocess_s *pp
+);
+
+/*
+ * Function: gmqcc_preprocess_destroy
+ *  Destroy preprocessor context
+ *
+ * Parameters:
+ *  pp - Pointer to preprocessor context
+ */     
+void gmqcc_preprocess_destroy(
+    struct gmqcc_preprocess_s *pp
+);
 
 #ifdef __cplusplus
 }
