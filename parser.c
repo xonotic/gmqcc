@@ -162,7 +162,6 @@ bool gmqcc_compiler_attachcontext(gmqcc_compiler_t *c, void *base, gmqcc_compile
             c->ctx_preprocess = (struct gmqcc_preprocess_s*)base;
             return true;
     }
-    gmqcc_global_error("Invalid context attachment");
     return false;
 }
 
