@@ -28,27 +28,27 @@
 #define QCINT_TO_HASH_ENTRY(q) ((void*)(uintptr_t)(q))
 #define HASH_ENTRY_TO_QCINT(h) ((qcint)(uintptr_t)(h))
 
-void code_push_statement(code_t *code, prog_section_statement *stmt, int linenum)
+void code_push_statement(gmqcc_code_t *code, prog_section_statement *stmt, int linenum)
 {
     vec_push(code->statements, *stmt);
     vec_push(code->linenums,   linenum);
 }
 
-void code_pop_statement(code_t *code)
+void code_pop_statement(gmqcc_code_t *code)
 {
     vec_pop(code->statements);
     vec_pop(code->linenums);
 }
 
-code_t *code_init() {
+gmqcc_code_t *code_init() {
     static prog_section_function  empty_function  = {0,0,0,0,0,0,0,{0,0,0,0,0,0,0,0}};
     static prog_section_statement empty_statement = {0,{0},{0},{0}};
     static prog_section_def       empty_def       = {0, 0, 0};
 
-    code_t *code       = (code_t*)mem_a(sizeof(code_t));
+    gmqcc_code_t *code       = (gmqcc_code_t*)mem_a(sizeof(gmqcc_code_t));
     int     i          = 0;
 
-    memset(code, 0, sizeof(code_t));
+    memset(code, 0, sizeof(gmqcc_code_t));
     code->entfields    = 0;
     code->string_cache = util_htnew(OPTS_OPTIMIZATION(OPTIM_OVERLAP_STRINGS) ? 0x100 : 1024);
 
@@ -72,7 +72,7 @@ code_t *code_init() {
 
 void *code_util_str_htgeth(hash_table_t *ht, const char *key, size_t bin);
 
-uint32_t code_genstring(code_t *code, const char *str)
+uint32_t code_genstring(gmqcc_code_t *code, const char *str)
 {
     uint32_t off;
     size_t   hash;
@@ -107,14 +107,14 @@ uint32_t code_genstring(code_t *code, const char *str)
     return off;
 }
 
-qcint code_alloc_field (code_t *code, size_t qcsize)
+qcint code_alloc_field (gmqcc_code_t *code, size_t qcsize)
 {
     qcint pos = (qcint)code->entfields;
     code->entfields += qcsize;
     return pos;
 }
 
-static void code_create_header(code_t *code, prog_header *code_header) {
+static void code_create_header(gmqcc_code_t *code, prog_header *code_header) {
     code_header->statements.offset = sizeof(prog_header);
     code_header->statements.length = vec_size(code->statements);
     code_header->defs.offset       = code_header->statements.offset + (sizeof(prog_section_statement) * vec_size(code->statements));
@@ -168,7 +168,7 @@ static void code_create_header(code_t *code, prog_header *code_header) {
  * directly out to allocated memory. Which is actually very useful for the future library support
  * we're going to add.
  */   
-bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t **lnomem, size_t *sizelno) {
+bool code_write_memory(gmqcc_code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t **lnomem, size_t *sizelno) {
     prog_header code_header;
     uint32_t    offset  = 0;
 
@@ -248,7 +248,7 @@ bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t 
     return true;
 }
 
-bool code_write(code_t *code, const char *filename, const char *lnofile) {
+bool code_write(gmqcc_code_t *code, const char *filename, const char *lnofile) {
     prog_header  code_header;
     FILE        *fp = NULL;
 

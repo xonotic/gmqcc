@@ -1834,8 +1834,10 @@ ftepp_t *gmqcc_preprocess_create(void)
     char major[32];
 
     ftepp = ftepp_new();
-    if (!ftepp)
+    if (!ftepp) {
+        gmqcc_global_error("Failed to construct a new preprocessor context");
         return NULL;
+    }
 
     memset(minor, 0, sizeof(minor));
     memset(major, 0, sizeof(major));

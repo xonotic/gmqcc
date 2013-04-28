@@ -327,6 +327,8 @@ char       *util_strcat   (char *dest, const char *src);
 char       *util_strncpy  (char *dest, const char *src, size_t num);
 const char *util_strerror (int num);
 
+const char *gmqcc_global_error(const char *text);
+
 
 /*
  * A flexible vector implementation: all vector pointers contain some
@@ -697,7 +699,7 @@ enum {
 typedef float   qcfloat;
 typedef int32_t qcint;
 
-typedef struct {
+typedef struct gmqcc_code_s {
     prog_section_statement *statements;
     int                    *linenums;
     prog_section_def       *defs;
@@ -709,7 +711,7 @@ typedef struct {
     uint32_t                entfields;
     ht                      string_cache;
     qcint                   string_cached_empty;
-} code_t;
+} gmqcc_code_t;
 
 /*
  * code_write          -- writes out the compiled file
@@ -719,12 +721,12 @@ typedef struct {
  * code_push_statement -- keeps statements and linenumbers together
  * code_pop_statement  -- keeps statements and linenumbers together 
  */
-bool      code_write         (code_t *, const char *filename, const char *lno);
-code_t   *code_init          (void);
-uint32_t  code_genstring     (code_t *, const char *string);
-qcint     code_alloc_field   (code_t *, size_t qcsize);
-void      code_push_statement(code_t *, prog_section_statement *stmt, int linenum);
-void      code_pop_statement (code_t *);
+bool           code_write         (gmqcc_code_t *, const char *filename, const char *lno);
+gmqcc_code_t  *code_init          (void);
+uint32_t       code_genstring     (gmqcc_code_t *, const char *string);
+qcint          code_alloc_field   (gmqcc_code_t *, size_t qcsize);
+void           code_push_statement(gmqcc_code_t *, prog_section_statement *stmt, int linenum);
+void           code_pop_statement (gmqcc_code_t *);
 
 /*
  * A shallow copy of a lex_file to remember where which ast node

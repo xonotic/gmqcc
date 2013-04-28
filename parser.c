@@ -28,6 +28,7 @@
 #include "base.h"
 #include "lexer.h"
 #include "ast.h"
+#include "gmqcc.h"
 
 /* beginning of locals */
 #define PARSER_HT_LOCALS  2
@@ -37,15 +38,15 @@
 
 typedef struct parser_s {
     lex_file *lex;
-    int      tok;
+    int       tok;
 
     ast_expression **globals;
     ast_expression **fields;
-    ast_function **functions;
-    ast_value    **imm_float;
-    ast_value    **imm_string;
-    ast_value    **imm_vector;
-    size_t         translated;
+    ast_function   **functions;
+    ast_value      **imm_float;
+    ast_value      **imm_string;
+    ast_value      **imm_vector;
+    size_t           translated;
 
     ht ht_imm_string;
 
@@ -104,17 +105,77 @@ typedef struct parser_s {
     /* collected information */
     size_t     max_param_count;
 
-    /* code generator */
-    code_t     *code;
+    gmqcc_code_t *code;
 } parser_t;
+
+/* WORK IN PROGRESS */
+typedef struct gmqcc_compiler_s {
+    struct parser_s           *ctx_parser;
+    struct gmqcc_preprocess_s *ctx_preprocess;
+    struct gmqcc_code_s       *ctx_code;
+} gmqcc_compiler_t;
+
+gmqcc_compiler_t *gmqcc_compiler_create(void) {
+    gmqcc_compiler_t *compiler = (gmqcc_compiler_t*)mem_a(sizeof(*compiler));
+    memset(compiler, 0, sizeof(*compiler));
+    return compiler;
+}
+
+void gmqcc_compiler_destroy(gmqcc_compiler_t *compiler) {
+    /* Doen't free members yet */
+    mem_d(compiler);
+}
+
+bool gmqcc_compiler_attachcontext(gmqcc_compiler_t *c, void *base, gmqcc_compiler_context_t type) {
+    if (!base) {
+        gmqcc_global_error("NULL attachment supplied for gmqcc_compiler_attachcontext");
+        return false;
+    }
+
+    switch (type) {
+        case GMQCC_CONTEXT_CODE:
+            c->ctx_code = (struct gmqcc_code_s*)base;
+            /*
+             * Update the parsers code context copy
+             * if the code context has changed.
+             */  
+            if (c->ctx_parser)
+                c->ctx_parser->code = c->ctx_code;
+            break;
+
+        case GMQCC_CONTEXT_PARSER:
+            /* Free memory */
+            if (c->ctx_parser)
+                parser_cleanup(c->ctx_parser);
+            if (!c->ctx_code) {
+                gmqcc_global_error("A code context must be created before a parser context");
+                return false;
+            }
+
+            c->ctx_parser       = (struct parser_s*)base;
+            c->ctx_parser->code = c->ctx_code; 
+            break;
+
+        case GMQCC_CONTEXT_PREPROCESSOR:
+            if (c->ctx_preprocess)
+                gmqcc_preprocess_destroy(c->ctx_preprocess);
+            c->ctx_preprocess = (struct gmqcc_preprocess_s*)base;
+            break;
+
+        default:
+            gmqcc_global_error("Invalid context attachment");
+            return false;
+    }
+    return true;
+}
 
 static ast_expression * const intrinsic_debug_typestring = (ast_expression*)0x1;
 
 static void parser_enterblock(parser_t *parser);
 static bool parser_leaveblock(parser_t *parser);
-static void parser_addlocal(parser_t *parser, const char *name, ast_expression *e);
-static void parser_addglobal(parser_t *parser, const char *name, ast_expression *e);
-static bool parse_typedef(parser_t *parser);
+static void parser_addlocal  (parser_t *parser, const char *name, ast_expression *e);
+static void parser_addglobal (parser_t *parser, const char *name, ast_expression *e);
+static bool parse_typedef    (parser_t *parser);
 static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofields, int qualifier, ast_value *cached_typedef, bool noref, bool is_static, uint32_t qflags, char *vstring);
 static ast_block* parse_block(parser_t *parser);
 static bool parse_block_into(parser_t *parser, ast_block *block);
@@ -6011,12 +6072,6 @@ parser_t *parser_create()
         return NULL;
 
     memset(parser, 0, sizeof(*parser));
-
-    if (!(parser->code = code_init())) {
-        mem_d(parser);
-        return NULL;
-    }
-    
 
     for (i = 0; i < operator_count; ++i) {
         if (operators[i].id == opid1('=')) {

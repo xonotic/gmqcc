@@ -62,6 +62,24 @@ void util_mem_f(void *ptr) {
     if (mem_provided) mem_free(ptr);
     else              free    (ptr);
 }
+
+/*
+ * Protect with mutex some day for thread safety reasons
+ * otherwise weird things may happen with error reporting
+ * when multiple-threads are introduced.
+ */   
+const char *gmqcc_global_error(const char *text) {
+    static char *error = NULL;
+    if (text) {
+        if (error) mem_d(error);
+        error = util_strdup(text);
+    }
+    return error;
+}
+
+const char *gmqcc_global_geterror(void) {
+    return gmqcc_global_error(NULL);
+}
     
 
 /*

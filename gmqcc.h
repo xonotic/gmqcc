@@ -32,6 +32,7 @@ extern "C" {
  * that the user shouldn't have information of.
  */
 struct gmqcc_preprocess_s;
+struct gmqcc_compiler_s;
 
 /*
  * Function: gmqcc_global_setmemory
@@ -55,6 +56,19 @@ bool gmqcc_global_setmemory (
     void *(*realloc_impl)(void *, size_t),
     void  (*free_impl)   (void *)
 );
+
+/*
+ * Funciton: gmqcc_global_geterror
+ *  Get a const string-literal of the last error which occured.
+ *
+ * Returns:
+ *  A string-literal describing the error which occured last.
+ *
+ * Remarks:     
+ *  This should be called to get better diagnostic when a function
+ *  doesn't return successfully.
+ */ 
+const char *gmqcc_global_geterror(void);
 
 /*
  * Function: gmqcc_preprocess_create
@@ -163,6 +177,86 @@ void gmqcc_preprocess_flush(
  */     
 void gmqcc_preprocess_destroy(
     struct gmqcc_preprocess_s *pp
+);
+
+
+/*
+ * Enumeration: gmqcc_compiler_context_t
+ *  List of bindable contexts for a compiler context
+ *
+ *  GMQCC_CONTEXT_PREPROCESSOR - A preprocessor context
+ *  GMQCC_CONTEXT_PARSER       - A parser context
+ *  GMQCC_CONTEXT_CODE         - A code generator context 
+ */  
+typedef enum {
+    GMQCC_CONTEXT_PREPROCESSOR,
+    GMQCC_CONTEXT_PARSER,
+    GMQCC_CONTEXT_CODE
+} gmqcc_compiler_context_t;
+
+/*
+ * Macro: GMQCC_CONTEXT_CAST
+ *  A macro for casting a bindable context, used primarly for context
+ *  manipulation where the functions are abstract and require a cast.
+ *
+ * See Also:
+ *  <gmqcc_compiler_attachcontext>   
+ */   
+#define GMQCC_CONTEXT_CAST(X) ((void*)(X))
+
+/*
+ * Function: gmqcc_compiler_create
+ *  Creates a compiler which will require attachments to
+ *  function.
+ *
+ * Returns:
+ *  A new compiler context
+ *
+ * Remarks:
+ *  Inorder to use the compiler context you'll require
+ *  at minimal a code and parser context.
+ *
+ * See Also:
+ *  <gmqcc_compiler_attachcontext>
+ */
+struct gmqcc_compiler_s *gmqcc_compiler_create(void);
+
+/*
+ * Function: gmqcc_compiler_attachcontext
+ *  Used to attach a context to a compiler context.
+ *
+ * Parameters:
+ *  compiler - Compiler context
+ *  base     - Base pointer to attachment context
+ *  context  - The type of context (see <gmqcc_compiler_context_t> et. all)
+ *
+ * Returns:
+ *  true on success, false otherwise.
+ *
+ * Remarks:
+ *  A parser context is mandatory, other contexts are optional.
+ *  Contexts can be swaped around, i.e you can detach a parser context,
+ *  back it up somewhere apply a new parser context and run with that.
+ */   
+bool gmqcc_compiler_attachcontext(
+    struct gmqcc_compiler_s  *compiler,
+    void                     *base,
+    gmqcc_compiler_context_t  context
+);
+
+/*
+ * Function: gmqcc_compiler_destroy
+ *  Destroys a compiler context.
+ *
+ * Parameters:
+ *  compiler - Compiler context
+ *
+ * Remarks:
+ *  This function doesn't destory any associated contexts with
+ *  the compiler context itself.
+ */
+void gmqcc_compiler_destroy(
+    struct gmqcc_compiler_s *compiler
 );
 
 #ifdef __cplusplus

@@ -549,9 +549,13 @@ int main(int argc, char **argv) {
     bool            operators_free   = false;
     bool            progs_src        = false;
     FILE            *outfile         = NULL;
-    struct parser_s *parser          = NULL;
 
-    struct gmqcc_preprocess_s  *ftepp           = NULL;
+    struct parser_s            *parser   = NULL;
+    struct gmqcc_preprocess_s  *ftepp    = NULL;
+    struct gmqcc_code_s        *code     = code_init();
+    struct gmqcc_compiler_s    *compiler = gmqcc_compiler_create();
+
+    gmqcc_compiler_attachcontext(compiler, GMQCC_CONTEXT_CAST(code), GMQCC_CONTEXT_CODE);
 
     app_name = argv[0];
     con_init ();
@@ -560,6 +564,7 @@ int main(int argc, char **argv) {
     util_seed(time(0));
 
     if (!options_parse(argc, argv)) {
+        gmqcc_compiler_destroy(compiler);
         return usage();
     }
 
@@ -631,6 +636,7 @@ int main(int argc, char **argv) {
             retval = 1;
             goto cleanup;
         }
+        gmqcc_compiler_attachcontext(compiler, GMQCC_CONTEXT_CAST(parser), GMQCC_CONTEXT_PARSER);
     }
 
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY) || OPTS_FLAG(FTEPP)) {
@@ -639,6 +645,7 @@ int main(int argc, char **argv) {
             retval = 1;
             goto cleanup;
         }
+        gmqcc_compiler_attachcontext(compiler, GMQCC_CONTEXT_CAST(ftepp), GMQCC_CONTEXT_PREPROCESSOR);
     }
 
     /* add macros */

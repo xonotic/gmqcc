@@ -212,7 +212,7 @@ const uint16_t type_not_instr[TYPE_COUNT] = {
 
 /* protos */
 static ir_value* ir_gen_extparam_proto(ir_builder *ir);
-static void      ir_gen_extparam      (code_t *, ir_builder *ir);
+static void      ir_gen_extparam      (gmqcc_code_t *, ir_builder *ir);
 
 /* error functions */
 
@@ -2618,9 +2618,9 @@ bool ir_function_calculate_liferanges(ir_function *self)
  *
  * Breaking conventions is annoying...
  */
-static bool ir_builder_gen_global(code_t *, ir_builder *self, ir_value *global, bool islocal);
+static bool ir_builder_gen_global(gmqcc_code_t *, ir_builder *self, ir_value *global, bool islocal);
 
-static bool gen_global_field(code_t *code, ir_value *global)
+static bool gen_global_field(gmqcc_code_t *code, ir_value *global)
 {
     if (global->hasvalue)
     {
@@ -2652,7 +2652,7 @@ static bool gen_global_field(code_t *code, ir_value *global)
     return true;
 }
 
-static bool gen_global_pointer(code_t *code, ir_value *global)
+static bool gen_global_pointer(gmqcc_code_t *code, ir_value *global)
 {
     if (global->hasvalue)
     {
@@ -2691,7 +2691,7 @@ static bool gen_global_pointer(code_t *code, ir_value *global)
     return true;
 }
 
-static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *block)
+static bool gen_blocks_recursive(gmqcc_code_t *code, ir_function *func, ir_block *block)
 {
     prog_section_statement stmt;
     ir_instr *instr;
@@ -2951,7 +2951,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
     return true;
 }
 
-static bool gen_function_code(code_t *code, ir_function *self)
+static bool gen_function_code(gmqcc_code_t *code, ir_function *self)
 {
     ir_block *block;
     prog_section_statement stmt, *retst;
@@ -2992,7 +2992,7 @@ static bool gen_function_code(code_t *code, ir_function *self)
     return true;
 }
 
-static qcint ir_builder_filestring(code_t *code, ir_builder *ir, const char *filename)
+static qcint ir_builder_filestring(gmqcc_code_t *code, ir_builder *ir, const char *filename)
 {
     /* NOTE: filename pointers are copied, we never strdup them,
      * thus we can use pointer-comparison to find the string.
@@ -3011,7 +3011,7 @@ static qcint ir_builder_filestring(code_t *code, ir_builder *ir, const char *fil
     return str;
 }
 
-static bool gen_global_function(code_t *code, ir_builder *ir, ir_value *global)
+static bool gen_global_function(gmqcc_code_t *code, ir_builder *ir, ir_value *global)
 {
     prog_section_function fun;
     ir_function          *irfun;
@@ -3066,7 +3066,7 @@ static ir_value* ir_gen_extparam_proto(ir_builder *ir)
     return global;
 }
 
-static void ir_gen_extparam(code_t *code, ir_builder *ir)
+static void ir_gen_extparam(gmqcc_code_t *code, ir_builder *ir)
 {
     prog_section_def def;
     ir_value        *global;
@@ -3091,7 +3091,7 @@ static void ir_gen_extparam(code_t *code, ir_builder *ir)
     vec_push(ir->extparams, global);
 }
 
-static bool gen_function_extparam_copy(code_t *code, ir_function *self)
+static bool gen_function_extparam_copy(gmqcc_code_t *code, ir_function *self)
 {
     size_t i, ext, numparams;
 
@@ -3126,7 +3126,7 @@ static bool gen_function_extparam_copy(code_t *code, ir_function *self)
     return true;
 }
 
-static bool gen_function_varargs_copy(code_t *code, ir_function *self)
+static bool gen_function_varargs_copy(gmqcc_code_t *code, ir_function *self)
 {
     size_t i, ext, numparams, maxparams;
 
@@ -3162,7 +3162,7 @@ static bool gen_function_varargs_copy(code_t *code, ir_function *self)
     return true;
 }
 
-static bool gen_function_locals(code_t *code, ir_builder *ir, ir_value *global)
+static bool gen_function_locals(gmqcc_code_t *code, ir_builder *ir, ir_value *global)
 {
     prog_section_function *def;
     ir_function           *irfun;
@@ -3211,7 +3211,7 @@ static bool gen_function_locals(code_t *code, ir_builder *ir, ir_value *global)
     return true;
 }
 
-static bool gen_global_function_code(code_t *code, ir_builder *ir, ir_value *global)
+static bool gen_global_function_code(gmqcc_code_t *code, ir_builder *ir, ir_value *global)
 {
     prog_section_function *fundef;
     ir_function           *irfun;
@@ -3257,7 +3257,7 @@ static bool gen_global_function_code(code_t *code, ir_builder *ir, ir_value *glo
     return true;
 }
 
-static void gen_vector_defs(code_t *code, prog_section_def def, const char *name)
+static void gen_vector_defs(gmqcc_code_t *code, prog_section_def def, const char *name)
 {
     char  *component;
     size_t len, i;
@@ -3287,7 +3287,7 @@ static void gen_vector_defs(code_t *code, prog_section_def def, const char *name
     mem_d(component);
 }
 
-static void gen_vector_fields(code_t *code, prog_section_field fld, const char *name)
+static void gen_vector_fields(gmqcc_code_t *code, prog_section_field fld, const char *name)
 {
     char  *component;
     size_t len, i;
@@ -3317,7 +3317,7 @@ static void gen_vector_fields(code_t *code, prog_section_field fld, const char *
     mem_d(component);
 }
 
-static bool ir_builder_gen_global(code_t *code, ir_builder *self, ir_value *global, bool islocal)
+static bool ir_builder_gen_global(gmqcc_code_t *code, ir_builder *self, ir_value *global, bool islocal)
 {
     size_t           i;
     int32_t         *iptr;
@@ -3488,12 +3488,12 @@ static bool ir_builder_gen_global(code_t *code, ir_builder *self, ir_value *glob
     }
 }
 
-static GMQCC_INLINE void ir_builder_prepare_field(code_t *code, ir_value *field)
+static GMQCC_INLINE void ir_builder_prepare_field(gmqcc_code_t *code, ir_value *field)
 {
     field->code.fieldaddr = code_alloc_field(code, type_sizeof_[field->fieldtype]);
 }
 
-static bool ir_builder_gen_field(code_t *code, ir_builder *self, ir_value *field)
+static bool ir_builder_gen_field(gmqcc_code_t *code, ir_builder *self, ir_value *field)
 {
     prog_section_def def;
     prog_section_field fld;
@@ -3563,7 +3563,7 @@ static bool ir_builder_gen_field(code_t *code, ir_builder *self, ir_value *field
     return field->code.globaladdr >= 0;
 }
 
-bool ir_builder_generate(code_t *code, ir_builder *self, const char *filename)
+bool ir_builder_generate(gmqcc_code_t *code, ir_builder *self, const char *filename)
 {
     prog_section_statement stmt;
     size_t i;
