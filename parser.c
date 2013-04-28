@@ -141,7 +141,7 @@ bool gmqcc_compiler_attachcontext(gmqcc_compiler_t *c, void *base, gmqcc_compile
              */  
             if (c->ctx_parser)
                 c->ctx_parser->code = c->ctx_code;
-            break;
+            return true;
 
         case GMQCC_CONTEXT_PARSER:
             /* Free memory */
@@ -154,19 +154,16 @@ bool gmqcc_compiler_attachcontext(gmqcc_compiler_t *c, void *base, gmqcc_compile
 
             c->ctx_parser       = (struct parser_s*)base;
             c->ctx_parser->code = c->ctx_code; 
-            break;
+            return true;
 
         case GMQCC_CONTEXT_PREPROCESSOR:
             if (c->ctx_preprocess)
                 gmqcc_preprocess_destroy(c->ctx_preprocess);
             c->ctx_preprocess = (struct gmqcc_preprocess_s*)base;
-            break;
-
-        default:
-            gmqcc_global_error("Invalid context attachment");
-            return false;
+            return true;
     }
-    return true;
+    gmqcc_global_error("Invalid context attachment");
+    return false;
 }
 
 static ast_expression * const intrinsic_debug_typestring = (ast_expression*)0x1;
