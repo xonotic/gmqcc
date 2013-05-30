@@ -3,11 +3,7 @@
 *.rej
 *.patch
 *.diff
-
-testsuite
-qcvm
-gmqcc
-pak
+*.exe
 
 distro/archlinux/*
 distro/archbsd/*
@@ -16,3 +12,8 @@ distro/archbsd/*
 !distro/archbsd/release/PKGBUILD
 !distro/archbsd/git/PKGBUILD
 !distro/archlinux/this/Makefile
+
+gmqcc
+gmqpak
+qcvm
+testsuite

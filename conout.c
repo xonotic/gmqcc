@@ -110,7 +110,7 @@ static int win_fputs(FILE *h, const char *str) {
     int wcolor;
     int icolor;
 
-    int state;
+    int state = 0;
 
     /* attributes */
     int intense  =  -1;
@@ -168,7 +168,7 @@ static int win_fputs(FILE *h, const char *str) {
                 state    = -1;
             }
         } else {
-            fs_file_putc(h, *str);
+            fs_file_write(str, 1, 1, stdout);
             length ++;
         }
         str++;
@@ -218,7 +218,11 @@ static int con_write(FILE *handle, const char *fmt, va_list va) {
     {
         char data[4096];
         memset(data, 0, sizeof(data));
+#ifdef _MSC_VER
+        vsnprintf_s(data, sizeof(data), sizeof(data), fmt, va);
+#else
         vsnprintf(data, sizeof(data), fmt, va);
+#endif
         ln = (GMQCC_IS_DEFINE(handle)) ? win_fputs(handle, data) : fs_file_puts(handle, data);
     }
     #endif
@@ -288,7 +292,7 @@ int con_change(const char *out, const char *err) {
 /*
  * Defaultizer because stdio.h shouldn't be used anywhere except here
  * and inside file.c To prevent mis-match of wrapper-interfaces.
- */ 
+ */
 FILE *con_default_out() {
     return (console.handle_out = stdout);
 }
@@ -329,7 +333,7 @@ int con_out(const char *fmt, ...) {
  * for reporting of file:line based on lexer context, These are used
  * heavily in the parser/ir/ast.
  */
-void con_vprintmsg_c(int level, const char *name, size_t line, const char *msgtype, const char *msg, va_list ap, const char *condname) {
+static void con_vprintmsg_c(int level, const char *name, size_t line, const char *msgtype, const char *msg, va_list ap, const char *condname) {
     /* color selection table */
     static int sel[] = {
         CON_WHITE,

@@ -36,7 +36,6 @@
  */
 #ifdef _MSC_VER
 #   pragma warning(disable : 4244 ) /* conversion from 'int' to 'float', possible loss of data */
-#   pragma warning(disable : 4018 ) /* signed/unsigned mismatch                                */
 #endif /*! _MSC_VER */
 
 #define GMQCC_VERSION_MAJOR 0
@@ -49,13 +48,17 @@
 #define GMQCC_VERSION_TYPE_DEVEL
 
 /* Full version string in case we need it */
-#ifdef GMQCC_GITINFO
-#    define GMQCC_DEV_VERSION_STRING "git build: " GMQCC_GITINFO "\n"
-#elif defined(GMQCC_VERSION_TYPE_DEVEL)
-#    define GMQCC_DEV_VERSION_STRING "development build\n"
+#ifdef GMQCC_VERSION_TYPE_DEVEL
+#    ifdef GMQCC_GITINFO
+#        define GMQCC_DEV_VERSION_STRING "git build: " GMQCC_GITINFO "\n"
+#    elif defined(GMQCC_VERSION_TYPE_DEVEL)
+#        define GMQCC_DEV_VERSION_STRING "development build\n"
+#    else
+#        define GMQCC_DEV_VERSION_STRING
+#    endif /*! GMQCC_GITINGO */
 #else
 #    define GMQCC_DEV_VERSION_STRING
-#endif /*! GMQCC_GITINGO */
+#endif
 
 #define GMQCC_STRINGIFY(x) #x
 #define GMQCC_IND_STRING(x) GMQCC_STRINGIFY(x)
@@ -168,17 +171,6 @@ GMQCC_IND_STRING(GMQCC_VERSION_PATCH) \
     typedef __int64          int64_t;
 #endif /*! _MSC_VER */
 
-/* 
- *windows makes these prefixed because they're C99
- * TODO: utility versions that are type-safe and not
- * just plain textual subsitution.
- */
-#ifdef _MSC_VER
-#    define snprintf(X, Y, Z, ...) _snprintf(X, Y, Z, __VA_ARGS__)
-    /* strtof doesn't exist -> strtod does though :) */
-#    define strtof(X, Y)          (float)(strtod(X, Y))
-#endif /*! _MSC_VER */
-
 /*
  * Very roboust way at determining endianess at compile time: this handles
  * almost every possible situation.  Otherwise a runtime check has to be
@@ -263,7 +255,7 @@ GMQCC_IND_STRING(GMQCC_VERSION_PATCH) \
  * On windows systems where we're not compiling with MING32 we need a
  * little extra help on dependinces for implementing our own dirent.h
  * in fs.c.
- */   
+ */
 #if defined(_WIN32) && !defined(__MINGW32__)
 #   define _WIN32_LEAN_AND_MEAN
 #   include <windows.h>
@@ -275,7 +267,7 @@ GMQCC_IND_STRING(GMQCC_VERSION_PATCH) \
         unsigned short     d_reclen;
         unsigned short     d_namlen;
         char               d_name[FILENAME_MAX];
-    }
+    };
 
     typedef struct {
         struct _finddata_t dd_dta;
@@ -284,6 +276,14 @@ GMQCC_IND_STRING(GMQCC_VERSION_PATCH) \
         int                dd_stat;
         char               dd_name[1];
     } DIR;
+    /*
+     * Visual studio also lacks S_ISDIR for sys/stat.h, so we emulate this as well
+     * which is not hard at all.
+     */
+#    ifdef S_ISDIR
+#        undef  S_ISDIR
+#    endif /*! S_ISDIR */
+#   define S_ISDIR(X) ((X)&_S_IFDIR)
 #else
 #   include <dirent.h>
 #endif /*! _WIN32 && !defined(__MINGW32__) */
@@ -300,7 +300,8 @@ void  util_meminfo       ();
 bool  util_filexists     (const char *);
 bool  util_strupper      (const char *);
 bool  util_strdigit      (const char *);
-char *_util_Estrdup        (const char *, const char *, size_t);
+char *_util_Estrdup      (const char *, const char *, size_t);
+char *_util_Estrdup_empty(const char *, const char *, size_t);
 void  util_debug         (const char *, const char *, ...);
 void  util_endianswap    (void *,  size_t, unsigned int);
 
@@ -312,8 +313,18 @@ uint16_t util_crc16(uint16_t crc, const char *data, size_t len);
 void     util_seed(uint32_t);
 uint32_t util_rand();
 
-int util_vasprintf(char **ret, const char *fmt, va_list);
-int util_asprintf (char **ret, const char *fmt, ...);
+/*
+ * String functions (formatting, copying, concatenating, errors). These are wrapped
+ * to use the MSVC _safe_ versions when using MSVC, plus some implementations of
+ * these are non-conformant or don't exist such as asprintf and snprintf, which are
+ * not supported in C90, but do exist in C99.
+ */
+int         util_vasprintf(char **ret, const char *fmt, va_list);
+int         util_asprintf (char **ret, const char *fmt, ...);
+int         util_snprintf (char *src,  size_t bytes, const char *format, ...);
+char       *util_strcat   (char *dest, const char *src);
+char       *util_strncpy  (char *dest, const char *src, size_t num);
+const char *util_strerror (int num);
 
 
 #ifdef NOTRACK
@@ -329,6 +340,7 @@ int util_asprintf (char **ret, const char *fmt, ...);
 #endif /*! NOTRACK */
 
 #define util_strdup(X)  _util_Estrdup((X), __FILE__, __LINE__)
+#define util_strdupe(X) _util_Estrdup_empty((X), __FILE__, __LINE__)
 
 /*
  * A flexible vector implementation: all vector pointers contain some
@@ -336,7 +348,7 @@ int util_asprintf (char **ret, const char *fmt, ...);
  * this data is represented in the structure below.  Doing this allows
  * us to use the array [] to access individual elements from the vector
  * opposed to using set/get methods.
- */     
+ */
 typedef struct {
     size_t  allocated;
     size_t  used;
@@ -353,7 +365,7 @@ void _util_vec_grow(void **a, size_t i, size_t s);
 )
 
 /* exposed interface */
-#define vec_meta(A)       (((vector_t*)(A)) - 1)
+#define vec_meta(A)       (((vector_t*)((void*)A)) - 1)
 #define vec_free(A)       ((void)((A) ? (mem_d((void*)vec_meta(A)), (A) = NULL) : 0))
 #define vec_push(A,V)     (GMQCC_VEC_WILLGROW((A),1), (A)[vec_meta(A)->used++] = (V))
 #define vec_size(A)       ((A) ? vec_meta(A)->used : 0)
@@ -377,14 +389,6 @@ typedef struct hash_table_t {
     size_t                size;
     struct hash_node_t **table;
 } hash_table_t, *ht;
-
-typedef struct hash_set_t {
-    size_t  bits;
-    size_t  mask;
-    size_t  capacity;
-    size_t *items;
-    size_t  total;
-} hash_set_t, *hs;
 
 /*
  * hashtable implementation:
@@ -417,52 +421,17 @@ typedef struct hash_set_t {
  * util_htdel(foo);
  */
 hash_table_t *util_htnew (size_t size);
+void          util_htrem (hash_table_t *ht, void (*callback)(void *data));
 void          util_htset (hash_table_t *ht, const char *key, void *value);
 void          util_htdel (hash_table_t *ht);
 size_t        util_hthash(hash_table_t *ht, const char *key);
 void          util_htseth(hash_table_t *ht, const char *key, size_t hash, void *value);
+void          util_htrmh (hash_table_t *ht, const char *key, size_t bin, void (*cb)(void*));
+void          util_htrm  (hash_table_t *ht, const char *key, void (*cb)(void*));
 
 void         *util_htget (hash_table_t *ht, const char *key);
 void         *util_htgeth(hash_table_t *ht, const char *key, size_t hash);
 
-/*
- * hashset implementation:
- *      This was designed for pointers:  you manage the life of the object yourself
- *      if you do use this for non-pointers please be warned that the object may not
- *      be valid if the duration of it exceeds (i.e on stack).  So you need to allocate
- *      yourself, or put those in global scope to ensure duration is for the whole
- *      runtime.
- *
- * util_hsnew()                             -- to make a new hashset
- * util_hsadd(set, key)                     -- to add something in the set
- * util_hshas(set, key)                     -- to check if something is in the set
- * util_hsrem(set, key)                     -- to remove something in the set
- * util_hsdel(set)                          -- to delete the set
- *
- * example of use:
- * 
- * hs    foo = util_hsnew();
- * char *bar = "hello blub\n";
- * char *baz = "hello dale\n";
- *
- * util_hsadd(foo, bar);
- * util_hsadd(foo, baz);
- * util_hsrem(foo, baz);
- *
- * printf("bar %d | baz %d\n",
- *     util_hshas(foo, bar),
- *     util_hshad(foo, baz)
- * );
- *
- * util_hsdel(foo);  
- */
-
-hash_set_t *util_hsnew(void);
-int         util_hsadd(hash_set_t *, void *);
-int         util_hshas(hash_set_t *, void *);
-int         util_hsrem(hash_set_t *, void *);
-void        util_hsdel(hash_set_t *);
- 
 /*===================================================================*/
 /*============================ file.c ===============================*/
 /*===================================================================*/
@@ -473,7 +442,7 @@ int            fs_file_getc   (FILE *);
 int            fs_file_printf (FILE *, const char *, ...);
 int            fs_file_puts   (FILE *, const char *);
 int            fs_file_seek   (FILE *, long int, int);
-long int       fs_file_tell   (FILE *); 
+long int       fs_file_tell   (FILE *);
 
 size_t         fs_file_read   (void *,        size_t, size_t, FILE *);
 size_t         fs_file_write  (const void *,  size_t, size_t, FILE *);
@@ -535,9 +504,9 @@ enum {
 #define CV_VAR   -1
 #define CV_WRONG  0x8000 /* magic number to help parsing */
 
-extern const char *type_name        [TYPE_COUNT];
-extern uint16_t    type_store_instr [TYPE_COUNT];
-extern uint16_t    field_store_instr[TYPE_COUNT];
+extern const char    *type_name        [TYPE_COUNT];
+extern const uint16_t type_store_instr [TYPE_COUNT];
+extern const uint16_t field_store_instr[TYPE_COUNT];
 
 /*
  * could use type_store_instr + INSTR_STOREP_F - INSTR_STORE_F
@@ -545,10 +514,10 @@ extern uint16_t    field_store_instr[TYPE_COUNT];
  * instruction set, the old ones are left untouched, thus the _I instructions
  * are at a seperate place.
  */
-extern uint16_t type_storep_instr[TYPE_COUNT];
-extern uint16_t type_eq_instr    [TYPE_COUNT];
-extern uint16_t type_ne_instr    [TYPE_COUNT];
-extern uint16_t type_not_instr   [TYPE_COUNT];
+extern const uint16_t type_storep_instr[TYPE_COUNT];
+extern const uint16_t type_eq_instr    [TYPE_COUNT];
+extern const uint16_t type_ne_instr    [TYPE_COUNT];
+extern const uint16_t type_not_instr   [TYPE_COUNT];
 
 typedef struct {
     uint32_t offset;      /* Offset in file of where data begins  */
@@ -738,32 +707,40 @@ enum {
     VINSTR_NRCALL
 };
 
-/* TODO: cleanup this mess */
-extern prog_section_statement *code_statements;
-extern int                    *code_linenums;
-extern prog_section_def       *code_defs;
-extern prog_section_field     *code_fields;
-extern prog_section_function  *code_functions;
-extern int                    *code_globals;
-extern char                   *code_chars;
-extern uint16_t code_crc;
-
 /* uhh? */
 typedef float   qcfloat;
 typedef int32_t qcint;
 
-/*
- * code_write -- writes out the compiled file
- * code_init  -- prepares the code file
- */
-bool     code_write       (const char *filename, const char *lno);
-void     code_init        ();
-uint32_t code_genstring   (const char *string);
-qcint    code_alloc_field (size_t qcsize);
+typedef struct {
+    prog_section_statement *statements;
+    int                    *linenums;
+    prog_section_def       *defs;
+    prog_section_field     *fields;
+    prog_section_function  *functions;
+    int                    *globals;
+    char                   *chars;
+    uint16_t                crc;
+    uint32_t                entfields;
+    ht                      string_cache;
+    qcint                   string_cached_empty;
+} code_t;
 
-/* this function is used to keep statements and linenumbers together */
-void     code_push_statement(prog_section_statement *stmt, int linenum);
-void     code_pop_statement();
+/*
+ * code_write          -- writes out the compiled file
+ * code_init           -- prepares the code file
+ * code_genstrin       -- generates string for code
+ * code_alloc_field    -- allocated a field
+ * code_push_statement -- keeps statements and linenumbers together
+ * code_pop_statement  -- keeps statements and linenumbers together 
+ */
+bool      code_write         (code_t *, const char *filename, const char *lno);
+GMQCC_WARN
+code_t   *code_init          (void);
+void      code_cleanup       (code_t *);
+uint32_t  code_genstring     (code_t *, const char *string);
+qcint     code_alloc_field   (code_t *, size_t qcsize);
+void      code_push_statement(code_t *, prog_section_statement *stmt, int linenum);
+void      code_pop_statement (code_t *);
 
 /*
  * A shallow copy of a lex_file to remember where which ast node
@@ -1016,7 +993,7 @@ void        prog_delete(qc_program *prog);
 
 bool prog_exec(qc_program *prog, prog_section_function *func, size_t flags, long maxjumps);
 
-char*             prog_getstring (qc_program *prog, qcint str);
+const char*       prog_getstring (qc_program *prog, qcint str);
 prog_section_def* prog_entfield  (qc_program *prog, qcint off);
 prog_section_def* prog_getdef    (qc_program *prog, qcint off);
 qcany*            prog_getedict  (qc_program *prog, qcint e);
@@ -1026,38 +1003,26 @@ qcint             prog_tempstring(qc_program *prog, const char *_str);
 /*===================================================================*/
 /*===================== parser.c commandline ========================*/
 /*===================================================================*/
+struct parser_s;
 
-bool parser_init          ();
-bool parser_compile_file  (const char *);
-bool parser_compile_string(const char *, const char *, size_t);
-bool parser_finish        (const char *);
-void parser_cleanup       ();
+struct parser_s *parser_create        ();
+bool             parser_compile_file  (struct parser_s *parser, const char *);
+bool             parser_compile_string(struct parser_s *parser, const char *, const char *, size_t);
+bool             parser_finish        (struct parser_s *parser, const char *);
+void             parser_cleanup       (struct parser_s *parser);
 
 /*===================================================================*/
 /*====================== ftepp.c commandline ========================*/
 /*===================================================================*/
-struct lex_file_s;
-typedef struct {
-    const char  *name;
-    char      *(*func)(struct lex_file_s *);
-} ftepp_predef_t;
-
-/*
- * line, file, counter, counter_last, random, random_last, date, time
- * increment when items are added
- */
-#define FTEPP_PREDEF_COUNT 8
-
-bool        ftepp_init             ();
-bool        ftepp_preprocess_file  (const char *filename);
-bool        ftepp_preprocess_string(const char *name, const char *str);
-void        ftepp_finish           ();
-const char *ftepp_get              ();
-void        ftepp_flush            ();
-void        ftepp_add_define       (const char *source, const char *name);
-void        ftepp_add_macro        (const char *name,   const char *value);
-
-extern const ftepp_predef_t ftepp_predefs[FTEPP_PREDEF_COUNT];
+struct ftepp_s;
+struct ftepp_s *ftepp_create           ();
+bool            ftepp_preprocess_file  (struct ftepp_s *ftepp, const char *filename);
+bool            ftepp_preprocess_string(struct ftepp_s *ftepp, const char *name, const char *str);
+void            ftepp_finish           (struct ftepp_s *ftepp);
+const char     *ftepp_get              (struct ftepp_s *ftepp);
+void            ftepp_flush            (struct ftepp_s *ftepp);
+void            ftepp_add_define       (struct ftepp_s *ftepp, const char *source, const char *name);
+void            ftepp_add_macro        (struct ftepp_s *ftepp, const char *name,   const char *value);
 
 /*===================================================================*/
 /*======================= main.c commandline ========================*/
@@ -1198,7 +1163,7 @@ typedef struct {
 
 extern opts_cmd_t opts;
 
-#define OPTS_GENERIC(f,i)    (!! (((f)[(i)/32]) & (1<< ((i)%32))))
+#define OPTS_GENERIC(f,i)    (!! (((f)[(i)/32]) & (1<< (unsigned)((i)%32))))
 #define OPTS_FLAG(i)         OPTS_GENERIC(opts.flags,        (i))
 #define OPTS_WARN(i)         OPTS_GENERIC(opts.warn,         (i))
 #define OPTS_WERROR(i)       OPTS_GENERIC(opts.werror,       (i))

@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012, 2013
  *     Wolfgang Bumiller
- *     Dale Weiler 
+ *     Dale Weiler
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -216,7 +216,7 @@ static size_t opts_ini_parse (
             /* section found */
             if (*(parse_end = opts_ini_next(parse_beg + 1, ']')) == ']') {
                 * parse_end = '\0'; /* terminate bro */
-                strncpy(section_data, parse_beg + 1, sizeof(section_data));
+                util_strncpy(section_data, parse_beg + 1, sizeof(section_data));
                 section_data[sizeof(section_data) - 1] = '\0';
                 *oldname_data                          = '\0';
             } else if (!error) {
@@ -237,7 +237,7 @@ static size_t opts_ini_parse (
                 opts_ini_rstrip(read_value);
 
                 /* valid name value pair, lets call down to handler */
-                strncpy(oldname_data, read_name, sizeof(oldname_data));
+                util_strncpy(oldname_data, read_name, sizeof(oldname_data));
                 oldname_data[sizeof(oldname_data) - 1] ='\0';
 
                 if ((*errorhandle = loadhandle(section_data, read_name, read_value)) && !error)
@@ -269,7 +269,7 @@ static char *opts_ini_load(const char *section, const char *name, const char *va
     /*
      * undef all of these because they may still be defined like in my
      * case they where.
-     */  
+     */
     #undef GMQCC_TYPE_FLAGS
     #undef GMQCC_TYPE_OPTIMIZATIONS
     #undef GMQCC_TYPE_WARNS
@@ -347,7 +347,7 @@ void opts_ini_init(const char *file) {
     size_t     line;
     FILE       *ini;
 
-    
+
     if (!file) {
         /* try ini */
         if (!(ini = fs_file_open((file = "gmqcc.ini"), "r")))
@@ -366,4 +366,4 @@ void opts_ini_init(const char *file) {
     }
 
     fs_file_close(ini);
-}  
+}

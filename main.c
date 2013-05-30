@@ -41,21 +41,17 @@ static ppitem  *ppems = NULL;
 #define TYPE_ASM 1
 #define TYPE_SRC 2
 
+
 static const char *app_name;
 
 static void version() {
-    con_out("GMQCC %d.%d.%d Built %s %s\n",
+    con_out("GMQCC %d.%d.%d Built %s %s\n" GMQCC_DEV_VERSION_STRING,
         GMQCC_VERSION_MAJOR,
         GMQCC_VERSION_MINOR,
         GMQCC_VERSION_PATCH,
         __DATE__,
         __TIME__
     );
-#ifdef GMQCC_GITINFO
-    con_out("git build: %s\n", GMQCC_GITINFO);
-#elif defined(GMQCC_VERION_TYPE_DEVEL)
-    con_out("development build\n");
-#endif
 }
 
 static int usage() {
@@ -173,6 +169,7 @@ static bool options_parse(int argc, char **argv) {
                     opts_set(opts.flags, INITIALIZED_NONCONSTANTS,      true);
                     opts_set(opts.werror, WARN_INVALID_PARAMETER_COUNT, true);
                     opts_set(opts.werror, WARN_MISSING_RETURN_VALUES,   true);
+                    opts_set(opts.flags,  EXPRESSIONS_FOR_BUILTINS,     true);
 
 
                     OPTS_OPTION_U32(OPTION_STANDARD) = COMPILER_GMQCC;
@@ -546,12 +543,14 @@ static bool progs_nextline(char **out, size_t *alen,FILE *src) {
 }
 
 int main(int argc, char **argv) {
-    size_t itr;
-    int    retval           = 0;
-    bool   opts_output_free = false;
-    bool   operators_free   = false;
-    bool   progs_src        = false;
-    FILE  *outfile          = NULL;
+    size_t          itr;
+    int             retval           = 0;
+    bool            opts_output_free = false;
+    bool            operators_free   = false;
+    bool            progs_src        = false;
+    FILE            *outfile         = NULL;
+    struct parser_s *parser          = NULL;
+    struct ftepp_s  *ftepp           = NULL;
 
     app_name = argv[0];
     con_init ();
@@ -626,7 +625,7 @@ int main(int argc, char **argv) {
     }
 
     if (!OPTS_OPTION_BOOL(OPTION_PP_ONLY)) {
-        if (!parser_init()) {
+        if (!(parser = parser_create())) {
             con_err("failed to initialize parser\n");
             retval = 1;
             goto cleanup;
@@ -634,22 +633,19 @@ int main(int argc, char **argv) {
     }
 
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY) || OPTS_FLAG(FTEPP)) {
-        if (!ftepp_init()) {
+        if (!(ftepp = ftepp_create())) {
             con_err("failed to initialize parser\n");
             retval = 1;
             goto cleanup;
         }
     }
-
-    if (OPTS_FLAG(TRUE_EMPTY_STRINGS))
-        type_not_instr[TYPE_STRING] = INSTR_NOT_F;
 
     util_debug("COM", "starting ...\n");
 
     /* add macros */
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY) || OPTS_FLAG(FTEPP)) {
         for (itr = 0; itr < vec_size(ppems); itr++) {
-            ftepp_add_macro(ppems[itr].name, ppems[itr].value);
+            ftepp_add_macro(ftepp, ppems[itr].name, ppems[itr].value);
             mem_d(ppems[itr].name);
 
             /* can be null */
@@ -708,6 +704,7 @@ srcdone:
             con_out("Mode: %s\n", (progs_src ? "progs.src" : "manual"));
             con_out("There are %lu items to compile:\n", (unsigned long)vec_size(items));
         }
+
         for (itr = 0; itr < vec_size(items); ++itr) {
             if (!OPTS_OPTION_BOOL(OPTION_QUIET) &&
                 !OPTS_OPTION_BOOL(OPTION_PP_ONLY))
@@ -722,33 +719,33 @@ srcdone:
 
             if (OPTS_OPTION_BOOL(OPTION_PP_ONLY)) {
                 const char *out;
-                if (!ftepp_preprocess_file(items[itr].filename)) {
+                if (!ftepp_preprocess_file(ftepp, items[itr].filename)) {
                     retval = 1;
                     goto cleanup;
                 }
-                out = ftepp_get();
+                out = ftepp_get(ftepp);
                 if (out)
                     fs_file_printf(outfile, "%s", out);
-                ftepp_flush();
+                ftepp_flush(ftepp);
             }
             else {
                 if (OPTS_FLAG(FTEPP)) {
                     const char *data;
-                    if (!ftepp_preprocess_file(items[itr].filename)) {
+                    if (!ftepp_preprocess_file(ftepp, items[itr].filename)) {
                         retval = 1;
                         goto cleanup;
                     }
-                    data = ftepp_get();
+                    data = ftepp_get(ftepp);
                     if (vec_size(data)) {
-                        if (!parser_compile_string(items[itr].filename, data, vec_size(data))) {
+                        if (!parser_compile_string(parser, items[itr].filename, data, vec_size(data))) {
                             retval = 1;
                             goto cleanup;
                         }
                     }
-                    ftepp_flush();
+                    ftepp_flush(ftepp);
                 }
                 else {
-                    if (!parser_compile_file(items[itr].filename)) {
+                    if (!parser_compile_file(parser, items[itr].filename)) {
                         retval = 1;
                         goto cleanup;
                     }
@@ -761,9 +758,10 @@ srcdone:
             }
         }
 
-        ftepp_finish();
+        ftepp_finish(ftepp);
+        ftepp = NULL;
         if (!OPTS_OPTION_BOOL(OPTION_PP_ONLY)) {
-            if (!parser_finish(OPTS_OPTION_STR(OPTION_OUTPUT))) {
+            if (!parser_finish(parser, OPTS_OPTION_STR(OPTION_OUTPUT))) {
                 retval = 1;
                 goto cleanup;
             }
@@ -787,13 +785,14 @@ srcdone:
 }
 cleanup:
     util_debug("COM", "cleaning ...\n");
-    ftepp_finish();
+    if (ftepp)
+        ftepp_finish(ftepp);
     con_close();
     vec_free(items);
     vec_free(ppems);
 
     if (!OPTS_OPTION_BOOL(OPTION_PP_ONLY))
-        parser_cleanup();
+        parser_cleanup(parser);
     if (opts_output_free)
         mem_d(OPTS_OPTION_STR(OPTION_OUTPUT));
     if (operators_free)

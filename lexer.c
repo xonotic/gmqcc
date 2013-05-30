@@ -58,9 +58,9 @@ static size_t num_keywords_fg = sizeof(keywords_fg) / sizeof(keywords_fg[0]);
  * Lexer code
  */
 
-char* *lex_filenames;
+static char* *lex_filenames;
 
-void lexerror(lex_file *lex, const char *fmt, ...)
+static void lexerror(lex_file *lex, const char *fmt, ...)
 {
     va_list ap;
 
@@ -72,7 +72,7 @@ void lexerror(lex_file *lex, const char *fmt, ...)
     va_end(ap);
 }
 
-bool lexwarn(lex_file *lex, int warntype, const char *fmt, ...)
+static bool lexwarn(lex_file *lex, int warntype, const char *fmt, ...)
 {
     bool    r;
     lex_ctx ctx;
@@ -484,6 +484,9 @@ static bool lex_try_pragma(lex_file *lex)
     lex->line = line;
     while (ch != '\n' && ch != EOF)
         ch = lex_getch(lex);
+    vec_free(command);
+    vec_free(param);
+    vec_free(pragma);
     return true;
 
 unroll:
@@ -1233,7 +1236,7 @@ int lex_do(lex_file *lex)
             /*
             case '+':
             case '-':
-            */ 
+            */
             case '*':
             case '/':
             case '<':

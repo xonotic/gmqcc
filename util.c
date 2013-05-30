@@ -26,12 +26,12 @@
 #include "gmqcc.h"
 
 /* TODO: remove globals ... */
-uint64_t mem_ab = 0;
-uint64_t mem_db = 0;
-uint64_t mem_at = 0;
-uint64_t mem_dt = 0;
-uint64_t mem_pk = 0;
-uint64_t mem_hw = 0;
+static uint64_t mem_ab = 0;
+static uint64_t mem_db = 0;
+static uint64_t mem_at = 0;
+static uint64_t mem_dt = 0;
+static uint64_t mem_pk = 0;
+static uint64_t mem_hw = 0;
 
 struct memblock_t {
     const char  *file;
@@ -226,6 +226,25 @@ char *_util_Estrdup(const char *s, const char *file, size_t line) {
     return ptr;
 }
 
+char *_util_Estrdup_empty(const char *s, const char *file, size_t line) {
+    size_t  len = 0;
+    char   *ptr = NULL;
+
+    /* in case of -DNOTRACK */
+    (void)file;
+    (void)line;
+
+    if (!s)
+        return NULL;
+
+    len = strlen(s);
+    if ((ptr = (char*)mem_af(len+1, line, file))) {
+        memcpy(ptr, s, len);
+        ptr[len] = '\0';
+    }
+    return ptr;
+}
+
 void util_debug(const char *area, const char *ms, ...) {
     va_list  va;
     if (!OPTS_OPTION_BOOL(OPTION_DEBUG))
@@ -243,7 +262,7 @@ void util_debug(const char *area, const char *ms, ...) {
 /*
  * only required if big endian .. otherwise no need to swap
  * data.
- */   
+ */
 #if PLATFORM_BYTE_ORDER == GMQCC_BYTE_ORDER_BIG
     static GMQCC_INLINE void util_swap16(uint16_t *d, size_t l) {
         while (l--) {
@@ -383,7 +402,7 @@ static const uint16_t util_crc16_table[] = {
 /* Non - Reflected */
 uint16_t util_crc16(uint16_t current, const char *k, size_t len) {
     register uint16_t h = current;
-    for (; len; --len, ++k) 
+    for (; len; --len, ++k)
         h = util_crc16_table[(h>>8)^((unsigned char)*k)]^(h<<8);
     return h;
 }
@@ -391,9 +410,9 @@ uint16_t util_crc16(uint16_t current, const char *k, size_t len) {
 #if 0
 uint16_t util_crc16(const char *k, int len, const short clamp) {
     register uint16_t h= (uint16_t)0xFFFFFFFF;
-    for (; len; --len, ++k) 
+    for (; len; --len, ++k)
         h = util_crc16_table[(h^((unsigned char)*k))&0xFF]^(h>>8);
-    return (~h)%clamp; 
+    return (~h)%clamp;
 }
 #endif
 
@@ -446,8 +465,7 @@ GMQCC_INLINE size_t util_hthash(hash_table_t *ht, const char *key) {
     const unsigned char *data  = (const unsigned char*)key;
 
     while (size >= 4) {
-        alias = *(uint32_t*)data;
-
+        alias  = (data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24));
         alias *= mix;
         alias ^= alias >> rot;
         alias *= mix;
@@ -473,12 +491,12 @@ GMQCC_INLINE size_t util_hthash(hash_table_t *ht, const char *key) {
     return (size_t) (hash % ht->size);
 }
 
-hash_node_t *_util_htnewpair(const char *key, void *value) {
+static hash_node_t *_util_htnewpair(const char *key, void *value) {
     hash_node_t *node;
     if (!(node = (hash_node_t*)mem_a(sizeof(hash_node_t))))
         return NULL;
 
-    if (!(node->key = util_strdup(key))) {
+    if (!(node->key = util_strdupe(key))) {
         mem_d(node);
         return NULL;
     }
@@ -601,7 +619,7 @@ void *code_util_str_htgeth(hash_table_t *ht, const char *key, size_t bin) {
  * Free all allocated data in a hashtable, this is quite the amount
  * of work.
  */
-void util_htdel(hash_table_t *ht) {
+void util_htrem(hash_table_t *ht, void (*callback)(void *data)) {
     size_t i = 0;
     for (; i < ht->size; i++) {
         hash_node_t *n = ht->table[i];
@@ -611,6 +629,8 @@ void util_htdel(hash_table_t *ht) {
         while (n) {
             if (n->key)
                 mem_d(n->key);
+            if (callback)
+                callback(n->value);
             p = n;
             n = n->next;
             mem_d(p);
@@ -622,151 +642,38 @@ void util_htdel(hash_table_t *ht) {
     mem_d(ht);
 }
 
-/*
- * A basic implementation of a hash-set.  Unlike a hashtable, a hash
- * set doesn't maintain key-value pairs.  It simply maintains a key
- * that can be set, removed, and checked for.
- *
- * See EXPOSED interface comment below 
- */
-#define GMQCC_HASHSET_PRIME0 0x0049
-#define GMQCC_HASHSET_PRIME1 0x1391
+void util_htrmh(hash_table_t *ht, const char *key, size_t bin, void (*cb)(void*)) {
+    hash_node_t **pair = &ht->table[bin];
+    hash_node_t *tmp;
 
-static int util_hsput(hash_set_t *set, void *item) {
-    size_t hash = (size_t)item; /* shouldn't drop the bits */
-    size_t iter;
+    while (*pair && (*pair)->key && strcmp(key, (*pair)->key) > 0)
+        pair = &(*pair)->next;
 
-    /* a == 0 || a == 1 */
-    if (hash >> 1)
-        return -1;
+    tmp = *pair;
+    if (!tmp || !tmp->key || strcmp(key, tmp->key) != 0)
+        return;
 
-    iter = set->mask & (GMQCC_HASHSET_PRIME0 * hash);
+    if (cb)
+        (*cb)(tmp->value);
 
-    /* while (set->items[iter] != 0 && set->items[iter] != 1) */
-    while  (!(set->items[iter] >> 1)) {
-        if (set->items[iter] == hash)
-            return 0;
-
-        iter = set->mask & (iter + GMQCC_HASHSET_PRIME1);
-    }
-
-    set->total ++;
-    set->items[iter] = hash;
-
-    return 1;
+    *pair = tmp->next;
+    mem_d(tmp->key);
+    mem_d(tmp);
 }
 
-static void util_hsupdate(hash_set_t *set) {
-    size_t *old;
-    size_t  end;
-    size_t  itr;
-
-    /* time to rehash? */
-    if ((float)set->total >= (size_t)((double)set->capacity * 0.85)) {
-        old = set->items;
-        end = set->capacity;
-
-        set->bits ++;
-        set->capacity = (size_t)(1 << set->bits);
-        set->mask     = set->capacity - 1;
-        set->items    = (size_t*)mem_a(set->capacity * sizeof(size_t));
-        set->total    = 0;
-
-        /*assert(set->items);*/
-
-        /*
-         * this shouldn't be slow?  if so unroll it a little perhaps
-         * (shouldn't be though)
-         */
-        for (itr = 0; itr < end; itr++)
-            util_hsput(set, (void*)old[itr]);
-
-        mem_d(old);
-    }
+void util_htrm(hash_table_t *ht, const char *key, void (*cb)(void*)) {
+    util_htrmh(ht, key, util_hthash(ht, key), cb);
 }
 
-/*
- * EXPOSED interface: all of these functions are exposed to the outside
- * for use. The stuff above is static because it's the "internal" mechanics
- * for syncronizing the set for updating, and putting data into the set.
- */   
-int util_hsadd(hash_set_t *set, void *item) {
-    int run = util_hsput(set, item); /* inlined */
-    util_hsupdate(set);
-
-    return run;
+void util_htdel(hash_table_t *ht) {
+    util_htrem(ht, NULL);
 }
-
-/* remove item in set */
-int util_hsrem(hash_set_t *set, void *item) {
-    size_t hash = (size_t)item;
-    size_t iter = set->mask & (GMQCC_HASHSET_PRIME0 * hash);
-
-    while  (set->items[iter]) {
-        if (set->items[iter] == hash) {
-            set->items[iter] =  1;
-            set->total       --;
-
-            return 1;
-        }
-        iter = set->mask & (iter + GMQCC_HASHSET_PRIME1);
-    }
-
-    return 0;
-}
-
-/* check if item is set */
-int util_hshas(hash_set_t *set, void *item) {
-    size_t hash = (size_t)item;
-    size_t iter = set->mask & (GMQCC_HASHSET_PRIME0 * hash);
-
-    while  (set->items[iter]) {
-        if (set->items[iter] == hash)
-            return 1;
-
-        iter = set->mask & (iter + GMQCC_HASHSET_PRIME1);
-    }
-
-    return 0;
-}
-
-hash_set_t *util_hsnew(void) {
-    hash_set_t *set;
-
-    if (!(set = (hash_set_t*)mem_a(sizeof(hash_set_t))))
-        return NULL;
-
-    set->bits     = 3;
-    set->total    = 0;
-    set->capacity = (size_t)(1 << set->bits);
-    set->mask     = set->capacity - 1;
-    set->items    = (size_t*)mem_a(set->capacity * sizeof(size_t));
-
-    if (!set->items) {
-        util_hsdel(set);
-        return NULL;
-    }
-
-    return set;
-}
-
-void util_hsdel(hash_set_t *set) {
-    if (!set) return;
-
-    if (set->items)
-        mem_d(set->items);
-
-    mem_d(set);
-}
-#undef GMQCC_HASHSET_PRIME0
-#undef GMQCC_HASHSET_PRIME1
-
 
 /*
  * Portable implementation of vasprintf/asprintf. Assumes vsnprintf
  * exists, otherwise compiler error.
  *
- * TODO: fix for MSVC ....  
+ * TODO: fix for MSVC ....
  */
 int util_vasprintf(char **dat, const char *fmt, va_list args) {
     int   ret;
@@ -778,16 +685,15 @@ int util_vasprintf(char **dat, const char *fmt, va_list args) {
      * formatted string if it overflows. However there is a MSVC
      * intrinsic (which is documented wrong) called _vcsprintf which
      * will return the required amount to allocate.
-     */     
+     */
     #ifdef _MSC_VER
-        char *str;
         if ((len = _vscprintf(fmt, args)) < 0) {
             *dat = NULL;
             return -1;
         }
 
-        tmp = mem_a(len + 1);
-        if ((ret = _vsnprintf(tmp, len+1, fmt, args)) != len) {
+        tmp = (char*)mem_a(len + 1);
+        if ((ret = _vsnprintf_s(tmp, len+1, len+1, fmt, args)) != len) {
             mem_d(tmp);
             *dat = NULL;
             return -1;
@@ -835,6 +741,92 @@ int util_asprintf(char **ret, const char *fmt, ...) {
 }
 
 /*
+ * These are various re-implementations (wrapping the real ones) of
+ * string functions that MSVC consideres unsafe. We wrap these up and
+ * use the safe varations on MSVC.
+ */
+#ifdef _MSC_VER
+    static char **util_strerror_allocated() {
+        static char **data = NULL;
+        return data;
+    }
+
+    static void util_strerror_cleanup(void) {
+        size_t i;
+        char  **data = util_strerror_allocated();
+        for (i = 0; i < vec_size(data); i++)
+            mem_d(data[i]);
+        vec_free(data);
+    }
+
+    const char *util_strerror(int num) {
+        char         *allocated = NULL;
+        static bool   install   = false;
+        static size_t tries     = 0;
+        char        **vector    = util_strerror_allocated();
+
+        /* try installing cleanup handler */
+        while (!install) {
+            if (tries == 32)
+                return "(unknown)";
+
+            install = !atexit(&util_strerror_cleanup);
+            tries ++;
+        }
+
+        allocated = (char*)mem_a(4096); /* A page must be enough */
+        strerror_s(allocated, 4096, num);
+    
+        vec_push(vector, allocated);
+        return (const char *)allocated;
+    }
+
+    int util_snprintf(char *src, size_t bytes, const char *format, ...) {
+        int      rt;
+        va_list  va;
+        va_start(va, format);
+
+        rt = vsprintf_s(src, bytes, format, va);
+        va_end  (va);
+
+        return rt;
+    }
+
+    char *util_strcat(char *dest, const char *src) {
+        strcat_s(dest, strlen(src), src);
+        return dest;
+    }
+
+    char *util_strncpy(char *dest, const char *src, size_t num) {
+        strncpy_s(dest, num, src, num);
+        return dest;
+    }
+#else
+    const char *util_strerror(int num) {
+        return strerror(num);
+    }
+
+    int util_snprintf(char *src, size_t bytes, const char *format, ...) {
+        int      rt;
+        va_list  va;
+        va_start(va, format);
+        rt = vsnprintf(src, bytes, format, va);
+        va_end  (va);
+
+        return rt;
+    }
+
+    char *util_strcat(char *dest, const char *src) {
+        return strcat(dest, src);
+    }
+
+    char *util_strncpy(char *dest, const char *src, size_t num) {
+        return strncpy(dest, src, num);
+    }
+
+#endif /*! _MSC_VER */
+
+/*
  * Implementation of the Mersenne twister PRNG (pseudo random numer
  * generator).  Implementation of MT19937.  Has a period of 2^19937-1
  * which is a Mersenne Prime (hence the name).
@@ -871,7 +863,7 @@ static GMQCC_INLINE void mt_generate() {
      * a branch that is executed every iteration from [0, MT_SIZE).
      *
      * Please see: http://www.quadibloc.com/crypto/co4814.htm for more
-     * information on how this clever trick works. 
+     * information on how this clever trick works.
      */
     static const uint32_t matrix[2] = {
         0x00000000,
