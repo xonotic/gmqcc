@@ -29,7 +29,6 @@ typedef struct {
     char      **values;  /* stream of values for tokens  */
 } diagnostic_data_t;
 
-
 /* map<const char *, vector<diagnostic_data_t>> */
 static ht diagnostic_table = NULL;
 
@@ -50,7 +49,6 @@ static void diagnostic_line(const char *file, size_t line, diagnostic_data_t ***
         FILE              *handle = fs_file_open(file, "r");
         size_t             size   = 0;
         size_t             tok    = 0;
-        
 
         /*
          * Now process all data line per line from the file, while inserting
@@ -61,7 +59,7 @@ static void diagnostic_line(const char *file, size_t line, diagnostic_data_t ***
          * which will be stored alongside the hashtable.
          */
         while (fs_file_getline(&next, &size, handle) != EOF) {
-            diagnostic_data_t *data    = mem_a(sizeof(diagnostic_data_t));
+            diagnostic_data_t *data    = (diagnostic_data_t*)mem_a(sizeof(diagnostic_data_t));
             
             data->tokens               = NULL;
             data->values               = NULL;
