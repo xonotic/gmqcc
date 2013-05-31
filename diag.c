@@ -29,12 +29,9 @@ typedef struct {
     char      **values;  /* stream of values for tokens  */
 } diagnostic_data_t;
 
-/*
- * TODO: these should become a structure pased around which is stored
- * in the parser instead of globals.
- */
-ht        diagnostic_table = NULL; /* map<const char *, vector<diagnostic_data_t>> */
-uint32_t  diagnostic_item  = 0;
+
+/* map<const char *, vector<diagnostic_data_t>> */
+static ht diagnostic_table = NULL;
 
 static void diagnostic_line(const char *file, size_t line, diagnostic_data_t ***read, size_t beg, size_t end) {
     diagnostic_data_t  **datas = NULL;
@@ -49,7 +46,7 @@ static void diagnostic_line(const char *file, size_t line, diagnostic_data_t ***
      */
     if (!(datas = (diagnostic_data_t**)util_htget(diagnostic_table, file))) {
         lex_file          *lexer  = NULL;
-        char              *line   = NULL;
+        char              *next   = NULL;
         FILE              *handle = fs_file_open(file, "r");
         size_t             size   = 0;
         size_t             tok    = 0;
@@ -63,13 +60,13 @@ static void diagnostic_line(const char *file, size_t line, diagnostic_data_t ***
          * complete, push the data associated with it into the datas vector
          * which will be stored alongside the hashtable.
          */
-        while (fs_file_getline(&line, &size, handle) != EOF) {
+        while (fs_file_getline(&next, &size, handle) != EOF) {
             diagnostic_data_t *data    = mem_a(sizeof(diagnostic_data_t));
             
             data->tokens               = NULL;
             data->values               = NULL;
-            data->line                 = util_strdup(line);
-            lexer                      = lex_open_string(line, strlen(line), file);
+            data->line                 = util_strdup(next);
+            lexer                      = lex_open_string(next, strlen(next), file);
             lexer->flags.preprocessing = true; /* enable whitespace */
             lexer->flags.mergelines    = true;
             
