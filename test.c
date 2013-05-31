@@ -449,7 +449,6 @@ static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *f
                     exit(EXIT_FAILURE);
 
                 vec_push(tmpl->comparematch, util_strdup(value));
-                printf("VALUE: %s\n", value);
 
                 break;
             }
