@@ -1246,12 +1246,10 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                         field->next->vtype == TYPE_FUNCTION &&
                         exprs[1]->vtype == TYPE_FUNCTION)
                     {
-                        parser->diagnostic = DIAGNOSTIC_ASSIGNMENT;
                         (void)!compile_warning(ctx, WARN_ASSIGN_FUNCTION_TYPES,
                                                "invalid types in assignment: cannot assign %s to %s", ty2, ty1);
                     }
                     else {
-                        parser->diagnostic = DIAGNOSTIC_ASSIGNMENT;
                         compile_error(ctx, "invalid types in assignment: cannot assign %s to %s", ty2, ty1);
                     }
                 }
@@ -2274,6 +2272,7 @@ static ast_expression* parse_expression(parser_t *parser, bool stopatcomma, bool
     if (!e)
         return NULL;
     if (parser->tok != ';') {
+        parser->diagnostic = DIAGNOSTIC_SEMICOLON;
         parseerror(parser, "semicolon expected after expression");
         ast_unref(e);
         return NULL;
@@ -5707,8 +5706,8 @@ skipvar:
             if (parser->tok != '=') {
                 const char *obtain = parser_tokval(parser);
                 if (!strcmp(obtain, "}")) {
-                    parser->diagnostic = DIAGNOSTIC_SEMICOLON_SAME;
-                    parseerror(parser, "expected semicolon, got `%s`", obtain);
+                    parser->diagnostic = DIAGNOSTIC_SEMICOLON;
+                    parseerror(parser, "expected semicolon");
                 } else
                     parseerror(parser, "missing initializer");
                 break;

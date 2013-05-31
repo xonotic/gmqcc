@@ -157,9 +157,6 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
     
     switch (diagnostic) {
         case DIAGNOSTIC_SEMICOLON:
-            break;
-            
-        case DIAGNOSTIC_SEMICOLON_SAME:
             for (; len < vec_size(vec_last(read)->values); len++)
                 space += strlen(vec_last(read)->values[len]);
                 
@@ -167,7 +164,7 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
             space -= beg - end;
             break;
             
-        case DIAGNOSTIC_ASSIGNMENT:
+        default:
             break;
     }
 
@@ -225,19 +222,6 @@ void diagnostic_calculate(const char *file, size_t line, size_t diagnostic) {
         case DIAGNOSTIC_SEMICOLON:
             linebeg++;
             marker = true;
-            break;
-        
-        case DIAGNOSTIC_SEMICOLON_SAME:
-            linecnt = 1;
-            linebeg = line-2;
-            marker  = true;
-            break;
-        
-        /* 
-         * Cases that don't need line calculation should break the
-         * statement and carry on to the feeder.
-         */
-        case DIAGNOSTIC_ASSIGNMENT:
             break;
 
         /* Catches the DIAGNOSTIC_NULL and out of range case */
