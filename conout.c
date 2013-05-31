@@ -249,6 +249,9 @@ void con_color(int state) {
     }
 }
 
+bool con_color_err() { return !!console.color_err; }
+bool con_color_out() { return !!console.color_out; }
+
 void con_init() {
     console.handle_err = stderr;
     console.handle_out = stdout;

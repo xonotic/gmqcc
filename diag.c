@@ -116,22 +116,22 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
 
     /* use old token stream to pretty the output */
     for (; feed < vec_size(read); feed++) {
-        con_out("%4d: ", line);
+        con_err("%4d: ", line);
         while ((tok = read[feed]->tokens[itr]) != TOKEN_EOL) {
             switch (tok) {
                 case TOKEN_TYPENAME:
                 case TOKEN_KEYWORD:
-                    con_out("\033[1;33m%s\033[0m", read[feed]->values[itr]);
+                    con_err(con_color_err() ? "\033[1;33m%s\033[0m" : "%s", read[feed]->values[itr]);
                     break;
 
                 case TOKEN_INTCONST:
                 case TOKEN_FLOATCONST:
-                    con_out("\033[1;32m%s\033[0m", read[feed]->values[itr]);
+                    con_err(con_color_err() ? "\033[1;32m%s\033[0m" : "%s", read[feed]->values[itr]);
                     break;
 
                 case TOKEN_CHARCONST:
                 case TOKEN_STRINGCONST:
-                    con_out("\033[1;31m%s\033[0m", read[feed]->values[itr]);
+                    con_err(con_color_err() ? "\033[1;31m%s\033[0m" : "%s", read[feed]->values[itr]);
                     break;
 
                 case TOKEN_EOF:
@@ -141,13 +141,13 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
                     break;
                     
                 default:
-                    con_out("%s", read[feed]->values[itr]);
+                    con_err("%s", read[feed]->values[itr]);
                     break;
             };
             itr++;
         }
         itr = 0;
-        con_out("\n");
+        con_err("\n");
     }
     
     switch (diagnostic) {
@@ -173,10 +173,10 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
             break;
     }
 
-    while (space --) con_out(" ");
-    while (len   --) con_out("~");
+    while (space --) con_err(" ");
+    while (len   --) con_err("~");
 
-    con_out((marker) ? "^\n" : "\n"); 
+    con_err((marker) ? "^\n" : "\n"); 
 
     vec_free(read);
 }

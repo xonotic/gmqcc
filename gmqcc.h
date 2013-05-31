@@ -791,6 +791,9 @@ int  con_vout  (const char *, va_list);
 int  con_err   (const char *, ...);
 int  con_out   (const char *, ...);
 
+bool con_color_err();
+bool con_color_out();
+
 /* error/warning interface */
 extern size_t compile_errors;
 extern size_t compile_Werrors;
