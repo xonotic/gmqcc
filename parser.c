@@ -3946,6 +3946,7 @@ static bool parse_enum(parser_t *parser)
     }
 
     if (!parser_next(parser) || parser->tok != ';') {
+        parser->diagnostic = DIAGNOSTIC_SEMICOLON;
         parseerror(parser, "expected semicolon after enumeration");
         goto onerror;
     }
@@ -6165,10 +6166,10 @@ static bool parser_compile(parser_t *parser)
         while (parser->tok != TOKEN_EOF && parser->tok < TOKEN_ERROR)
         {
             if (!parser_global_statement(parser)) {
-                if (parser->tok == TOKEN_EOF)
+                parser->diagnostic = DIAGNOSTIC_NULL;
+                if (parser->tok == TOKEN_EOF) {
                     parseerror(parser, "unexpected eof");
-                else if (compile_errors) {
-                    parser->diagnostic = DIAGNOSTIC_NULL;
+                } else if (compile_errors) {
                     parseerror(parser, "there have been errors, bailing out");
                 }
                 lex_close(parser->lex);
