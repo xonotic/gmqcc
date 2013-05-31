@@ -1245,7 +1245,7 @@ static void task_schedualize(size_t *pad) {
              */
             if (vec_size(match) > vec_size(task_tasks[i].tmpl->comparematch)) {
                 for (d = 0; d < vec_size(match) - vec_size(task_tasks[i].tmpl->comparematch); d++) {
-                    con_out("        Expected: Nothing                                   | Got: \"%s\"\n",
+                    con_out("        Expected: Nothing                                                       | Got: \"%s\"\n",
                         match[d + vec_size(task_tasks[i].tmpl->comparematch)]
                     );
                 }

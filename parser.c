@@ -2220,6 +2220,7 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
                 }
             }
             if (!concatenated) {
+                parser->diagnostic = DIAGNOSTIC_EXPECTED_END;
                 parseerror(parser, "expected operator or end of statement");
                 goto onerr;
             }

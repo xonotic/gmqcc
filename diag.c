@@ -151,6 +151,15 @@ static void diagnostic_feed(const char *file, size_t line, size_t column, size_t
     }
     
     switch (diagnostic) {
+        case DIAGNOSTIC_EXPECTED_END:
+            for (; len < vec_size(vec_last(read)->values); len++)
+                space += strlen(vec_last(read)->values[len]);
+            
+            /* +/- 1 because of the ^ */
+            len   = space  - column - 1;
+            space = column          + 1;
+            break;
+            
         case DIAGNOSTIC_EXPRESSION_CASE:
         case DIAGNOSTIC_SEMICOLON:
             for (; len < vec_size(vec_last(read)->values); len++)
@@ -243,20 +252,14 @@ void diagnostic_calculate(const char *file, size_t line, size_t column, size_t d
          * enable the marker (to show where it's missing).
          */
         case DIAGNOSTIC_SEMICOLON:
-            linebeg++;
-            marker = true;
-            break;
-            
         case DIAGNOSTIC_EXPRESSION_CASE:
+        case DIAGNOSTIC_EXPECTED_END:
             linebeg++;
             marker = true;
             break;
-
-        case DIAGNOSTIC_EXPECTED:
-            marker = true;
-            break;
-            
+        
         case DIAGNOSTIC_UNEXPECTED_IDENT:
+        case DIAGNOSTIC_EXPECTED:
             marker = true;
             break;
 
