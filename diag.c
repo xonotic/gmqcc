@@ -157,15 +157,6 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
     
     switch (diagnostic) {
         case DIAGNOSTIC_SEMICOLON:
-            while (vec_last(read)->line[space] != '=')
-                space++;
-            space++;
-            while (vec_last(read)->line[space] == ' ')
-                space++;
-
-            while (vec_last(read)->line[space + len] != '\n')
-                len++;
-
             break;
             
         case DIAGNOSTIC_SEMICOLON_SAME:
