@@ -3371,12 +3371,14 @@ static bool parse_switch_go(parser_t *parser, ast_block *block, ast_expression *
         if (!strcmp(parser_tokval(parser), "case")) {
             if (!parser_next(parser)) {
                 ast_delete(switchnode);
+                parser->diagnostic = DIAGNOSTIC_EXPRESSION_CASE;
                 parseerror(parser, "expected expression for case");
                 return false;
             }
             swcase.value = parse_expression_leave(parser, false, false, false);
             if (!swcase.value) {
                 ast_delete(switchnode);
+                parser->diagnostic = DIAGNOSTIC_EXPRESSION_CASE;
                 parseerror(parser, "expected expression for case");
                 return false;
             }

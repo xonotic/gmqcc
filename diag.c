@@ -156,6 +156,7 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
     }
     
     switch (diagnostic) {
+        case DIAGNOSTIC_EXPRESSION_CASE:
         case DIAGNOSTIC_SEMICOLON:
             for (; len < vec_size(vec_last(read)->values); len++)
                 space += strlen(vec_last(read)->values[len]);
@@ -220,6 +221,11 @@ void diagnostic_calculate(const char *file, size_t line, size_t diagnostic) {
          * enable the marker (to show where it's missing).
          */
         case DIAGNOSTIC_SEMICOLON:
+            linebeg++;
+            marker = true;
+            break;
+            
+        case DIAGNOSTIC_EXPRESSION_CASE:
             linebeg++;
             marker = true;
             break;
