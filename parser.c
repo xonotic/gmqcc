@@ -1960,11 +1960,13 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
                     correct_free(&corr);
 
                     if (correct) {
+                        parser->diagnostic = DIAGNOSTIC_UNEXPECTED_IDENT;
                         parseerror(parser, "unexpected ident: %s (did you mean %s?)", parser_tokval(parser), correct);
                         mem_d(correct);
                         return false;
                     }
                 }
+                parser->diagnostic = DIAGNOSTIC_UNEXPECTED_IDENT;
                 parseerror(parser, "unexpected ident: %s", parser_tokval(parser));
                 return false;
             }

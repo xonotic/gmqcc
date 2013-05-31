@@ -678,7 +678,6 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
             abort();
         }
 
-        /* skip directories */
         if (S_ISDIR(directory.st_mode))
             continue;
 

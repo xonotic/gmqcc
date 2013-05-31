@@ -160,6 +160,15 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
             space -= beg - end;
             break;
             
+        case DIAGNOSTIC_UNEXPECTED_IDENT:
+            for (itr = 0; len < vec_size(vec_last(read)->tokens); len++) {
+                if (vec_last(read)->tokens[len] == TOKEN_IDENT)
+                    break;
+                space += strlen(vec_last(read)->values[len]);
+            }
+            len = 0;
+            break;
+            
         default:
             break;
     }
@@ -222,6 +231,10 @@ void diagnostic_calculate(const char *file, size_t line, size_t diagnostic) {
             
         case DIAGNOSTIC_EXPRESSION_CASE:
             linebeg++;
+            marker = true;
+            break;
+
+        case DIAGNOSTIC_UNEXPECTED_IDENT:
             marker = true;
             break;
 

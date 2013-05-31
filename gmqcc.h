@@ -1030,7 +1030,8 @@ void            ftepp_add_macro        (struct ftepp_s *ftepp, const char *name,
 enum {
     DIAGNOSTIC_NULL,
     DIAGNOSTIC_SEMICOLON,
-    DIAGNOSTIC_EXPRESSION_CASE
+    DIAGNOSTIC_EXPRESSION_CASE,
+    DIAGNOSTIC_UNEXPECTED_IDENT
 };
 
 void diagnostic_destroy();
