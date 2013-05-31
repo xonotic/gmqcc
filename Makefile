@@ -44,7 +44,7 @@ ifeq ($(track), no)
 	CFLAGS += -DNOTRACK
 endif
 
-OBJ_D = util.o code.o ast.o ir.o conout.o ftepp.o opts.o fs.o utf8.o correct.o
+OBJ_D = util.o code.o ast.o ir.o conout.o ftepp.o opts.o fs.o utf8.o correct.o diag.o
 OBJ_P = util.o fs.o conout.o opts.o pak.o
 OBJ_T = test.o util.o conout.o fs.o
 OBJ_C = main.o lexer.o parser.o fs.o
@@ -244,8 +244,9 @@ opts.o: gmqcc.h opts.def
 fs.o: gmqcc.h opts.def
 utf8.o: gmqcc.h opts.def
 correct.o: gmqcc.h opts.def
+diag.o: gmqcc.h opts.def
 pak.o: gmqcc.h opts.def
 test.o: gmqcc.h opts.def
 main.o: gmqcc.h opts.def lexer.h
 lexer.o: gmqcc.h opts.def lexer.h
-parser.o: gmqcc.h opts.def lexer.h ast.h ir.h intrin.h
+parser.o: gmqcc.h opts.def intrin.h

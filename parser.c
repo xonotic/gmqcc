@@ -31,7 +31,6 @@
 
 /* beginning of locals */
 #define PARSER_HT_LOCALS  2
-
 #define PARSER_HT_SIZE    128
 #define TYPEDEF_HT_SIZE   16
 
@@ -103,6 +102,9 @@ typedef struct parser_s {
 
     /* collected information */
     size_t     max_param_count;
+    
+    /* diagnostic */
+    size_t     diagnostic;
 
     /* code generator */
     code_t     *code;
@@ -127,173 +129,6 @@ static ast_value* parser_create_array_getter_proto(parser_t *parser, ast_value *
 static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_value *cached_typedef);
 
 
-/* map<string, vector<char>> */
-ht        diagnostic_table = NULL;
-char    **diagnostic_index = NULL;
-uint32_t  diagnostic_item  = 0;
-
-static void diagnostic_line(parser_t *parser, char ***read, size_t beg, size_t end) {
-    char **lines = NULL;
-    size_t feed  = 0;
-
-    if (!diagnostic_table)
-         diagnostic_table = util_htnew(1024);
-
-    if (!(lines = (char**)util_htget(diagnostic_table, parser->lex->name))) {
-        char  *data  = NULL;
-        size_t size  = 0;
-        FILE *handle = fs_file_open(parser->lex->name, "r");
-
-        while (fs_file_getline(&data, &size, handle) != EOF) {
-            /* claim memory for string */
-            char *claim = util_strdup(data);
-
-            vec_push(lines, claim);
-        }
-        mem_d(data);
-        
-        util_htset(diagnostic_table, parser->lex->name, lines);
-        vec_push(diagnostic_index, parser->lex->name);
-        fs_file_close(handle);
-    }
-
-    /* store the lines request back to the vector */
-    if (parser->lex->line - beg + end > vec_size(lines)) {
-        beg = 1;
-        end = 1;
-    }
-
-    for(feed = parser->lex->line - beg; feed < parser->lex->line - beg + end; ++feed)
-        vec_push((*read), lines[feed]);
-}
-
-static void diagnostic_feed(parser_t *parser, size_t beg, size_t end, bool marker) {
-    lex_file *lexer = NULL;
-    char    **read  = NULL;
-    char     *peek  = NULL;
-    char     *find  = parser->lex->tok.value;
-    size_t    feed  = 0;
-    size_t    space = 0;
-    size_t    len   = strlen(find);
-    int       tok   = 0;
-
-    diagnostic_line(parser, &read, beg, end);
-
-    for (; feed < vec_size(read); feed++) {
-        lexer = lex_open_string(read[feed], strlen(read[feed]), parser->lex->name);
-        lexer->flags.preprocessing = true; /* enable whitespace */
-        lexer->flags.mergelines    = true;
-
-        con_out("% 4d| ", parser->lex->line - beg + feed + 1); 
-
-        /* fancy printing */
-        while ((tok = lex_do(lexer)) != TOKEN_EOF) {
-            switch (tok) {
-
-                case TOKEN_TYPENAME:
-                case TOKEN_KEYWORD:
-                    con_out("\033[1;33m%s\033[0m", lexer->tok.value);
-                    break;
-
-                case TOKEN_INTCONST:
-                case TOKEN_FLOATCONST:
-                    con_out("\033[1;32m%s\033[0m", lexer->tok.value);
-                    break;
-
-                case TOKEN_CHARCONST:
-                case TOKEN_STRINGCONST:
-                    con_out("\033[1;31m%s\033[0m", lexer->tok.value);
-                    break;
-
-                case TOKEN_EOF:
-                case TOKEN_ERROR:
-                case TOKEN_EOL:
-                    /* ignore */
-                    break;
-
-                default:
-                    con_out("%s", lexer->tok.value);
-                    break;
-            };
-        }
-        lex_close(lexer);
-        con_out("\n");
-    }
-
-    /* MOTHER FUCKING HACK! */
-    /* MOTHER FUCKING HACK! */
-    if (!strcmp(find, "SEMICOLON")) {
-        space = 0;
-        len = 0;
-        while (vec_last(read)[space] != '=')
-            space++;
-        space++;
-        while (vec_last(read)[space] == ' ')
-            space++;
-
-        while (vec_last(read)[space + len] != '\n')
-            len++;
-
-        space += 6;
-    } else {
-        /* find it in the last line */
-        if ((peek = strstr(vec_last(read), find))) {
-            space = peek - vec_last(read) + 6; /*% 4d|*/
-        }
-    }
-
-    while (space --) con_out(" ");
-    while (len   --) con_out("~");
-
-    con_out((marker) ? "^\n" : "\n"); /* marker */
-
-    /* yes we allocate a whole vector each subsection read */
-    vec_free(read);
-}
-
-static void diagnostic_destroy() {
-    char **lines = NULL;
-    size_t index = 0;
-    size_t item  = 0;
-
-    /*
-     * TODO: traverse the hash table and free from the buckets. Or even
-     * better implement an 'iterator' system for it to enumerate items.
-     * we currently store a vector of strings as "keys" into the hashtable
-     * such that we can erase all allocated data. This is such a waste of
-     * space.
-     */
-    if (!diagnostic_index || !diagnostic_table)
-        return;
-
-    for (; index < vec_size(diagnostic_index); index++) {
-        lines = (char**)util_htget(diagnostic_table, diagnostic_index[index]);
-        for (item = 0; item < vec_size(lines); item++) {
-            mem_d(lines[item]);
-        }
-        vec_free(lines);
-    }
-
-    util_htdel(diagnostic_table);
-    vec_free  (diagnostic_index);
-}
-
-static void diagnostic_calculate(parser_t *parser, const char *fmt) {
-    size_t linebeg = 1;
-    size_t linecnt = 1;
-    bool   marker  = false;
-
-    if (strstr(fmt, "missing semicolon"))
-        linebeg++, marker = true;
-    /*
-     * special linebeg/ linecnt offset calculations can be done
-     * here.
-     */  
-
-    diagnostic_feed(parser, linebeg, linecnt, marker);
-    parser->lex->tok.value = NULL; /* MOTHER FUCKING HACK! */
-}
-
 static void parseerror(parser_t *parser, const char *fmt, ...)
 {
     va_list  ap;
@@ -304,9 +139,7 @@ static void parseerror(parser_t *parser, const char *fmt, ...)
     vcompile_error(parser->lex->tok.ctx, fmt, ap);
     va_end(ap);
 
-    /* only print when not bailing out */
-    if (!strstr(fmt, "bailing out"))
-        diagnostic_calculate(parser, fmt);
+    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->diagnostic);
 }
 
 /* returns true if it counts as an error */
@@ -317,6 +150,8 @@ static bool GMQCC_WARN parsewarning(parser_t *parser, int warntype, const char *
     va_start(ap, fmt);
     r = vcompile_warning(parser->lex->tok.ctx, warntype, fmt, ap);
     va_end(ap);
+    
+    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->diagnostic);
     return r;
 }
 
@@ -1411,11 +1246,14 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                         field->next->vtype == TYPE_FUNCTION &&
                         exprs[1]->vtype == TYPE_FUNCTION)
                     {
+                        parser->diagnostic = DIAGNOSTIC_ASSIGNMENT;
                         (void)!compile_warning(ctx, WARN_ASSIGN_FUNCTION_TYPES,
                                                "invalid types in assignment: cannot assign %s to %s", ty2, ty1);
                     }
-                    else
+                    else {
+                        parser->diagnostic = DIAGNOSTIC_ASSIGNMENT;
                         compile_error(ctx, "invalid types in assignment: cannot assign %s to %s", ty2, ty1);
+                    }
                 }
             }
             else
@@ -3130,10 +2968,12 @@ static bool parse_return(parser_t *parser, ast_block *block, ast_expression **ou
             return false;
         }
 
-        if (parser->tok != ';')
+        if (parser->tok != ';') {
+            parser->diagnostic = DIAGNOSTIC_SEMICOLON;
             parseerror(parser, "missing semicolon after return assignment");
-        else if (!parser_next(parser))
+        } else if (!parser_next(parser)) {
             parseerror(parser, "parse error after return assignment");
+        }
 
         *out = var;
         return true;
@@ -5866,9 +5706,10 @@ skipvar:
         if (parser->tok != '{' || var->expression.vtype != TYPE_FUNCTION) {
             if (parser->tok != '=') {
                 const char *obtain = parser_tokval(parser);
-                if (!strcmp(obtain, "}"))
-                    parseerror(parser, "missing semicolon");
-                else
+                if (!strcmp(obtain, "}")) {
+                    parser->diagnostic = DIAGNOSTIC_SEMICOLON_SAME;
+                    parseerror(parser, "expected semicolon, got `%s`", obtain);
+                } else
                     parseerror(parser, "missing initializer");
                 break;
             }
@@ -6081,8 +5922,7 @@ another:
         }
 
         if (parser->tok != ';') {
-            /* MOTHER FUCKING HACK! */
-            parser->lex->tok.value = "SEMICOLON";
+            parser->diagnostic = DIAGNOSTIC_SEMICOLON;
             parseerror(parser, "missing semicolon after variables");
             break;
         }
@@ -6324,8 +6164,10 @@ static bool parser_compile(parser_t *parser)
             if (!parser_global_statement(parser)) {
                 if (parser->tok == TOKEN_EOF)
                     parseerror(parser, "unexpected eof");
-                else if (compile_errors)
+                else if (compile_errors) {
+                    parser->diagnostic = DIAGNOSTIC_NULL;
                     parseerror(parser, "there have been errors, bailing out");
+                }
                 lex_close(parser->lex);
                 parser->lex = NULL;
                 return false;

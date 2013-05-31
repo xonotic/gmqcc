@@ -1004,7 +1004,6 @@ qcint             prog_tempstring(qc_program *prog, const char *_str);
 /*===================== parser.c commandline ========================*/
 /*===================================================================*/
 struct parser_s;
-
 struct parser_s *parser_create        ();
 bool             parser_compile_file  (struct parser_s *parser, const char *);
 bool             parser_compile_string(struct parser_s *parser, const char *, const char *, size_t);
@@ -1023,6 +1022,20 @@ const char     *ftepp_get              (struct ftepp_s *ftepp);
 void            ftepp_flush            (struct ftepp_s *ftepp);
 void            ftepp_add_define       (struct ftepp_s *ftepp, const char *source, const char *name);
 void            ftepp_add_macro        (struct ftepp_s *ftepp, const char *name,   const char *value);
+
+/*===================================================================*/
+/*============================= exec.c ==============================*/
+/*===================================================================*/
+enum {
+    DIAGNOSTIC_NULL,
+    DIAGNOSTIC_SEMICOLON,      /* Where semicolon requires from next line */
+    DIAGNOSTIC_SEMICOLON_SAME, /* Where semicolon required from same line */
+    DIAGNOSTIC_ASSIGNMENT
+};
+
+void diagnostic_destroy();
+void diagnostic_calculate(const char *file, size_t line, size_t diagnostic);
+
 
 /*===================================================================*/
 /*======================= main.c commandline ========================*/
