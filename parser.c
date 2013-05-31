@@ -1987,7 +1987,8 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
         vec_push(sy->out, syexp(parser_ctx(parser), var));
         return true;
     }
-    parseerror(parser, "unexpected token `%s`", parser_tokval(parser));
+    parser->diagnostic = DIAGNOSTIC_UNEXPECTED_TOKEN;
+    parseerror(parser, "unexpected token: `%s`", parser_tokval(parser));
     return false;
 }
 
@@ -6011,6 +6012,7 @@ static bool parser_global_statement(parser_t *parser)
     }
     else
     {
+        parser->diagnostic = DIAGNOSTIC_UNEXPECTED_TOKEN;
         parseerror(parser, "unexpected token: `%s`", parser->lex->tok.value);
         return false;
     }

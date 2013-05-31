@@ -139,7 +139,7 @@ static void diagnostic_feed(const char *file, size_t line, size_t column, size_t
                 case TOKEN_EOL:
                     /* ignore */
                     break;
-                    
+
                 default:
                     con_err("%s", read[feed]->values[itr]);
                     break;
@@ -149,26 +149,26 @@ static void diagnostic_feed(const char *file, size_t line, size_t column, size_t
         itr = 0;
         con_err("\n");
     }
-    
+
     switch (diagnostic) {
         case DIAGNOSTIC_EXPECTED_END:
             for (; len < vec_size(vec_last(read)->values); len++)
                 space += strlen(vec_last(read)->values[len]);
-            
+
             /* +/- 1 because of the ^ */
             len   = space  - column - 1;
             space = column          + 1;
             break;
-            
+
         case DIAGNOSTIC_EXPRESSION_CASE:
         case DIAGNOSTIC_SEMICOLON:
             for (; len < vec_size(vec_last(read)->values); len++)
                 space += strlen(vec_last(read)->values[len]);
-                
+
             len    = 1;
             space -= beg - end;
             break;
-            
+
         case DIAGNOSTIC_EXPECTED:
             /*
              * use the column number here, it's the EASIEST method yet
@@ -177,7 +177,11 @@ static void diagnostic_feed(const char *file, size_t line, size_t column, size_t
             space += column;
             len    = 0;
             break;
-            
+
+        case DIAGNOSTIC_UNEXPECTED_TOKEN:
+            len = column;
+            break;
+
         case DIAGNOSTIC_UNEXPECTED_IDENT:
             /*
              * TODO: better way to determine the identifier. So far we
@@ -257,7 +261,11 @@ void diagnostic_calculate(const char *file, size_t line, size_t column, size_t d
             linebeg++;
             marker = true;
             break;
-        
+
+        case DIAGNOSTIC_UNEXPECTED_TOKEN:
+            marker = false;
+            break;
+
         case DIAGNOSTIC_UNEXPECTED_IDENT:
         case DIAGNOSTIC_EXPECTED:
             marker = true;
