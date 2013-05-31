@@ -170,6 +170,15 @@ static void diagnostic_feed(const char *file, size_t line, size_t column, size_t
             break;
             
         case DIAGNOSTIC_UNEXPECTED_IDENT:
+            /*
+             * TODO: better way to determine the identifier. So far we
+             * "assume" it's the first one in the token stream, the issue
+             * with this, is it'ss possible that it isn't the first ident
+             * in the stream. In all likely hood, the parser itself should
+             * carry a "current token in line" count so we can simply use
+             * it as a index into vec_last(read)->tokens. This will also
+             * allow for other diagnostics involving unexpected tokens.
+             */
             for (itr = 0; len < vec_size(vec_last(read)->tokens); len++) {
                 if (vec_last(read)->tokens[len] == TOKEN_IDENT)
                     break;

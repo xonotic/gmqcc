@@ -139,7 +139,8 @@ static void parseerror(parser_t *parser, const char *fmt, ...)
     vcompile_error(parser->lex->tok.ctx, fmt, ap);
     va_end(ap);
 
-    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->lex->column, parser->diagnostic);
+    if (OPTS_OPTION_BOOL(OPTION_DIAGNOSTICS))
+        diagnostic_calculate(parser->lex->name, parser->lex->line, parser->lex->column, parser->diagnostic);
 }
 
 /* returns true if it counts as an error */
@@ -151,7 +152,8 @@ static bool GMQCC_WARN parsewarning(parser_t *parser, int warntype, const char *
     r = vcompile_warning(parser->lex->tok.ctx, warntype, fmt, ap);
     va_end(ap);
     
-    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->lex->column, parser->diagnostic);
+    if (OPTS_OPTION_BOOL(OPTION_DIAGNOSTICS))
+        diagnostic_calculate(parser->lex->name, parser->lex->line, parser->lex->column, parser->diagnostic);
     return r;
 }
 
