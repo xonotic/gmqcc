@@ -139,7 +139,7 @@ static void parseerror(parser_t *parser, const char *fmt, ...)
     vcompile_error(parser->lex->tok.ctx, fmt, ap);
     va_end(ap);
 
-    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->diagnostic);
+    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->lex->column, parser->diagnostic);
 }
 
 /* returns true if it counts as an error */
@@ -151,7 +151,7 @@ static bool GMQCC_WARN parsewarning(parser_t *parser, int warntype, const char *
     r = vcompile_warning(parser->lex->tok.ctx, warntype, fmt, ap);
     va_end(ap);
     
-    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->diagnostic);
+    diagnostic_calculate(parser->lex->name, parser->lex->line, parser->lex->column, parser->diagnostic);
     return r;
 }
 
@@ -3898,6 +3898,7 @@ static bool parse_enum(parser_t *parser)
         parser_addglobal(parser, var->name, (ast_expression*)var);
 
         if (!parser_next(parser)) {
+            parser->diagnostic = DIAGNOSTIC_EXPECTED;
             parseerror(parser, "expected `=`, `}` or comma after identifier");
             goto onerror;
         }
@@ -3907,6 +3908,7 @@ static bool parse_enum(parser_t *parser)
         if (parser->tok == '}')
             break;
         if (parser->tok != '=') {
+            parser->diagnostic = DIAGNOSTIC_EXPECTED;
             parseerror(parser, "expected `=`, `}` or comma after identifier");
             goto onerror;
         }

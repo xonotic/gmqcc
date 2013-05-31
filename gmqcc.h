@@ -1034,11 +1034,12 @@ enum {
     DIAGNOSTIC_NULL,
     DIAGNOSTIC_SEMICOLON,
     DIAGNOSTIC_EXPRESSION_CASE,
-    DIAGNOSTIC_UNEXPECTED_IDENT
+    DIAGNOSTIC_UNEXPECTED_IDENT,
+    DIAGNOSTIC_EXPECTED
 };
 
 void diagnostic_destroy();
-void diagnostic_calculate(const char *file, size_t line, size_t diagnostic);
+void diagnostic_calculate(const char *file, size_t line, size_t column, size_t diagnostic);
 
 
 /*===================================================================*/

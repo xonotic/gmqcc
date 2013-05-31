@@ -103,7 +103,7 @@ static void diagnostic_line(const char *file, size_t line, diagnostic_data_t ***
         vec_push((*read), datas[feed]);
 }
 
-static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t end, bool marker, size_t diagnostic) {
+static void diagnostic_feed(const char *file, size_t line, size_t column, size_t beg, size_t end, bool marker, size_t diagnostic) {
     diagnostic_data_t  **read  = NULL;
     size_t               feed  = 0;
     size_t               space = 6;
@@ -160,6 +160,15 @@ static void diagnostic_feed(const char *file, size_t line, size_t beg, size_t en
             space -= beg - end;
             break;
             
+        case DIAGNOSTIC_EXPECTED:
+            /*
+             * use the column number here, it's the EASIEST method yet
+             * because it points to the exact space.
+             */
+            space += column;
+            len    = 0;
+            break;
+            
         case DIAGNOSTIC_UNEXPECTED_IDENT:
             for (itr = 0; len < vec_size(vec_last(read)->tokens); len++) {
                 if (vec_last(read)->tokens[len] == TOKEN_IDENT)
@@ -212,7 +221,7 @@ void diagnostic_destroy() {
     util_htrem(diagnostic_table, diagnostic_destory_data);
 }
 
-void diagnostic_calculate(const char *file, size_t line, size_t diagnostic) {
+void diagnostic_calculate(const char *file, size_t line, size_t column, size_t diagnostic) {
     size_t linebeg = 1;
     size_t linecnt = 1;
     bool   marker  = false;
@@ -234,6 +243,10 @@ void diagnostic_calculate(const char *file, size_t line, size_t diagnostic) {
             marker = true;
             break;
 
+        case DIAGNOSTIC_EXPECTED:
+            marker = true;
+            break;
+            
         case DIAGNOSTIC_UNEXPECTED_IDENT:
             marker = true;
             break;
@@ -243,5 +256,5 @@ void diagnostic_calculate(const char *file, size_t line, size_t diagnostic) {
             return;
     }
 
-    diagnostic_feed(file, line, linebeg, linecnt, marker, diagnostic);
+    diagnostic_feed(file, line, column, linebeg, linecnt, marker, diagnostic);
 }

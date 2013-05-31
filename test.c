@@ -436,7 +436,7 @@ static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *f
                     goto failure;
                 }
 
-                if (value && *value && (*value == ' ' || *value == '\t'))
+                if (value && (*value == ' ' || *value == '\t'))
                     value++;
 
                 /*
@@ -449,6 +449,7 @@ static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *f
                     exit(EXIT_FAILURE);
 
                 vec_push(tmpl->comparematch, util_strdup(value));
+                printf("VALUE: %s\n", value);
 
                 break;
             }
@@ -1230,7 +1231,7 @@ static void task_schedualize(size_t *pad) {
             );
             for (; d < vec_size(task_tasks[i].tmpl->comparematch); d++) {
                 char  *select = task_tasks[i].tmpl->comparematch[d];
-                size_t length = 40 - strlen(select);
+                size_t length = 60 - strlen(select);
 
                 con_out("        Expected: \"%s\"", select);
                 while (length --)
