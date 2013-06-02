@@ -278,6 +278,7 @@ static ast_value* parser_const_string(parser_t *parser, const char *str, bool do
             char name[32];
             util_snprintf(name, sizeof(name), "dotranslate_%lu", (unsigned long)(parser->translated++));
             ast_value_set_name(out, name);
+            out->expression.flags |= AST_FLAG_INCLUDE_DEF;
         }
         return out;
     }
@@ -291,6 +292,7 @@ static ast_value* parser_const_string(parser_t *parser, const char *str, bool do
         char name[32];
         util_snprintf(name, sizeof(name), "dotranslate_%lu", (unsigned long)(parser->translated++));
         out = ast_value_new(parser_ctx(parser), name, TYPE_STRING);
+        out->expression.flags |= AST_FLAG_INCLUDE_DEF;
     } else
         out = ast_value_new(parser_ctx(parser), "#IMMEDIATE", TYPE_STRING);
     out->cvq      = CV_CONST;
@@ -4816,6 +4818,7 @@ static ast_value *parse_parameter_list(parser_t *parser, ast_value *var)
 
     /* for the sake of less code we parse-in in this function */
     if (!parser_next(parser)) {
+        ast_delete(var);
         parseerror(parser, "expected parameter list");
         return NULL;
     }
@@ -5083,6 +5086,7 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
         /* parse on */
         if (!parser_next(parser)) {
             ast_delete(var);
+            mem_d(name);
             parseerror(parser, "error after variable or field declaration");
             return NULL;
         }
@@ -5092,8 +5096,10 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
     if (parser->tok == '[') {
         wasarray = true;
         var = parse_arraysize(parser, var);
-        if (!var)
+        if (!var) {
+            if (name) mem_d(name);
             return NULL;
+        }
     }
 
     /* This is the point where we can turn it into a field */
@@ -5112,8 +5118,7 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
     while (parser->tok == '(') {
         var = parse_parameter_list(parser, var);
         if (!var) {
-            if (name)
-                mem_d((void*)name);
+            if (name) mem_d(name);
             return NULL;
         }
     }
@@ -5122,11 +5127,12 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
     if (name) {
         if (!ast_value_set_name(var, name)) {
             ast_delete(var);
+            mem_d(name);
             parseerror(parser, "internal error: failed to set name");
             return NULL;
         }
         /* free the name, ast_value_set_name duplicates */
-        mem_d((void*)name);
+        mem_d(name);
     }
 
     return var;

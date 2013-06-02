@@ -174,6 +174,7 @@ static bool options_parse(int argc, char **argv) {
 
                     OPTS_OPTION_U32(OPTION_STANDARD) = COMPILER_GMQCC;
                     OPTS_OPTION_BOOL(OPTION_DIAGNOSTICS) = true;
+                    OPTS_OPTION_BOOL(OPTION_STATISTICS) = true;
 
                 } else if (!strcmp(argarg, "qcc")) {
 
@@ -779,11 +780,6 @@ srcdone:
             }
         }
     }
-{
-    #define FOO "\xD\xE\xA\xD\xB\xE\xE\xF\xD\xE\xA\xD\xB\xE\xE\xF"
-    char *foo = util_strdup(FOO FOO FOO FOO "hello world!");
-    (void)foo;
-}
 cleanup:
     util_debug("COM", "cleaning ...\n");
     if (ftepp)
@@ -800,6 +796,7 @@ cleanup:
         mem_d((void*)operators);
 
     lex_cleanup();
-    util_meminfo();
+    stat_info();
+
     return retval;
 }
