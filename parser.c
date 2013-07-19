@@ -261,10 +261,10 @@ static char *parser_strdup(const char *str)
 
 static ast_value* parser_const_string(parser_t *parser, const char *str, bool dotranslate)
 {
-    size_t hash = util_hthash(parser->ht_imm_string, str);
-    ast_value *out;
-    hash_table_t *ht_string =
+    ht ht_string =
         dotranslate ? parser->ht_imm_string_dotranslate : parser->ht_imm_string;
+    size_t hash = util_hthash(ht_string, str);
+    ast_value *out;
 
     if ( (out = (ast_value*)util_htgeth(ht_string, str, hash)) )
         return out;
