@@ -1,10 +1,35 @@
-Release v0.2.4
+Release v0.3.0
+    * Language:
+        - Return assignments, the ability to assign to the return keyword
+          as if it were a local variable.
+    * Compilation:
+        - Optimized memory usage (now uses on average %3 less memory for
+          compilation).
+        - Fixed dotranslate (translatable strings)
+    * QCVM:
+        - Escape strings for -printdefs
+    * Commandline:
+        - Added statistic dumps, gives information about the number of used
+          hashtables, vectors, and number of unique sizes of vectors and
+          hashtables. The amount of memory used for vectors. As well as the
+          number of strdups used in total for compilation.
+    * Testsuite:
+        - Fixed a floating point exception rasied by modulo operation in
+          -memchk.
+    * Build:
+        - Added gentoo ebuilds.
+        - Added win32 Makefile for building win32 packages.
+        - Added slackware pkg build files
+
+2012-04-27 v0.2.9
     * Preprocessor:
         - __VA_ARGS__ support
+        _ __VA_ARGS__ indexing
         - Predefined macros like __DATE__, __TIME__, ...
           (check the manpage for a full list)
         - Signed numbers as single token in the
         - Fixes some issues with #if operations on macros.
+        - Speed improvements
     * Language:
         - Untyped `nil` keyword.
         - Removed the `noreturn` keyword.
@@ -21,6 +46,8 @@ Release v0.2.4
         - Type restricted variadict parameters:
           ie: void print(string...);
         - Accessing varargs from QC via: ...(index, type)
+        - New operators: ** (exponentiation), % (modulo), etc
+        - Enumeration attributes: flag, reverse
     * Compilation:
         - Various optimizations and progs-size reductions.
         - A new spell-checking algorithm tries to hint you at existing
@@ -29,16 +56,35 @@ Release v0.2.4
           have been solved in both DP and our own executor. A new
           compatbility option (enabled by default) has been added for
           now: -flegacy-vector-maths
-    * qcvm:
+        - Compiler intrinsics: __builtin_floor, __builtin_mod,
+          __builtin_exp, __builtin_isnan
+        - Improved memory tracing
+        - Speed improvements
+    * QCVM:
         - Improved commandline argument handling.
-        - More builtins: sqrt(), normalize()
+        - More builtins: sqrt(), normalize(), floor()
     * Commandline:
+        - Nicer memory dumps
         - Support for making individual warnings an error
         - via -Werror-<warning>
         - added --add-info
     * Testsuite:
         - Support for QCFLAGS to run tests with several additional
           flags.
+        - Added support for preprocessor tests
+        - Added preprocessor tests
+        - Added defs.qh (auto included) for qcvm definitions
+    * Syntax Highlighting:
+        - Added various syntax highlighting description files for
+          various text editors / integrated development envirorments,
+          including support for: geany, kate, kwrite, kdevelop, QtCreator,
+          gtksourceview, gedit, sany, nano, jedit
+    * Build:
+        - Build scripts for building debian, archlinux and archbsd
+          packages for x86, and x86_64.
+        - Makefile targets for gource visualization, and render of
+          gource visualization.
+
 
 2012-12-27 Hotfix v0.2.2
     * Liferanges

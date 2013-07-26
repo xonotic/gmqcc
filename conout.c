@@ -21,7 +21,6 @@
  * SOFTWARE.
  */
 #include "gmqcc.h"
-#include <stdio.h>
 
 /*
  * isatty/STDERR_FILENO/STDOUT_FILNO
@@ -110,7 +109,7 @@ static int win_fputs(FILE *h, const char *str) {
     int wcolor;
     int icolor;
 
-    int state;
+    int state = 0;
 
     /* attributes */
     int intense  =  -1;
@@ -198,7 +197,7 @@ static con_t console;
  * NOTE: This prevents colored output to piped stdout/err via isatty
  * checks.
  */
-static void con_enablecolor() {
+static void con_enablecolor(void) {
     if (console.handle_err == stderr || console.handle_err == stdout)
         console.color_err = !!(isatty(STDERR_FILENO));
     if (console.handle_out == stderr || console.handle_out == stdout)
@@ -218,7 +217,11 @@ static int con_write(FILE *handle, const char *fmt, va_list va) {
     {
         char data[4096];
         memset(data, 0, sizeof(data));
+#ifdef _MSC_VER
+        vsnprintf_s(data, sizeof(data), sizeof(data), fmt, va);
+#else
         vsnprintf(data, sizeof(data), fmt, va);
+#endif
         ln = (GMQCC_IS_DEFINE(handle)) ? win_fputs(handle, data) : fs_file_puts(handle, data);
     }
     #endif
@@ -288,7 +291,7 @@ int con_change(const char *out, const char *err) {
 /*
  * Defaultizer because stdio.h shouldn't be used anywhere except here
  * and inside file.c To prevent mis-match of wrapper-interfaces.
- */ 
+ */
 FILE *con_default_out() {
     return (console.handle_out = stdout);
 }
@@ -329,7 +332,7 @@ int con_out(const char *fmt, ...) {
  * for reporting of file:line based on lexer context, These are used
  * heavily in the parser/ir/ast.
  */
-void con_vprintmsg_c(int level, const char *name, size_t line, const char *msgtype, const char *msg, va_list ap, const char *condname) {
+static void con_vprintmsg_c(int level, const char *name, size_t line, size_t column, const char *msgtype, const char *msg, va_list ap, const char *condname) {
     /* color selection table */
     static int sel[] = {
         CON_WHITE,
@@ -343,9 +346,9 @@ void con_vprintmsg_c(int level, const char *name, size_t line, const char *msgty
     int (*vprint)(const char *, va_list) = (err) ? &con_verr : &con_vout;
 
     if (color)
-        print("\033[0;%dm%s:%d: \033[0;%dm%s: \033[0m", CON_CYAN, name, (int)line, sel[level], msgtype);
+        print("\033[0;%dm%s:%d:%d: \033[0;%dm%s: \033[0m", CON_CYAN, name, (int)line, (int)column, sel[level], msgtype);
     else
-        print("%s:%d: %s: ", name, (int)line, msgtype);
+        print("%s:%d:%d: %s: ", name, (int)line, (int)column, msgtype);
 
     vprint(msg, ap);
     if (condname)
@@ -354,19 +357,19 @@ void con_vprintmsg_c(int level, const char *name, size_t line, const char *msgty
         print("\n");
 }
 
-void con_vprintmsg(int level, const char *name, size_t line, const char *msgtype, const char *msg, va_list ap) {
-    con_vprintmsg_c(level, name, line, msgtype, msg, ap, NULL);
+void con_vprintmsg(int level, const char *name, size_t line, size_t column, const char *msgtype, const char *msg, va_list ap) {
+    con_vprintmsg_c(level, name, line, column, msgtype, msg, ap, NULL);
 }
 
-void con_printmsg(int level, const char *name, size_t line, const char *msgtype, const char *msg, ...) {
+void con_printmsg(int level, const char *name, size_t line, size_t column, const char *msgtype, const char *msg, ...) {
     va_list   va;
     va_start(va, msg);
-    con_vprintmsg(level, name, line, msgtype, msg, va);
+    con_vprintmsg(level, name, line, column, msgtype, msg, va);
     va_end  (va);
 }
 
 void con_cvprintmsg(void *ctx, int lvl, const char *msgtype, const char *msg, va_list ap) {
-    con_vprintmsg(lvl, ((lex_ctx*)ctx)->file, ((lex_ctx*)ctx)->line, msgtype, msg, ap);
+    con_vprintmsg(lvl, ((lex_ctx*)ctx)->file, ((lex_ctx*)ctx)->line, ((lex_ctx*)ctx)->column, msgtype, msg, ap);
 }
 
 void con_cprintmsg (void *ctx, int lvl, const char *msgtype, const char *msg, ...) {
@@ -428,7 +431,7 @@ bool GMQCC_WARN vcompile_warning(lex_ctx ctx, int warntype, const char *fmt, va_
         lvl = LVL_ERROR;
     }
 
-    con_vprintmsg_c(lvl, ctx.file, ctx.line, msgtype, fmt, ap, warn_name);
+    con_vprintmsg_c(lvl, ctx.file, ctx.line, ctx.column, msgtype, fmt, ap, warn_name);
 
     return OPTS_WERROR(warntype) && OPTS_FLAG(BAIL_ON_WERROR);
 }

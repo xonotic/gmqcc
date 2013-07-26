@@ -20,13 +20,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include "gmqcc.h"
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include "gmqcc.h"
+
 opts_cmd_t opts;
 
-const char *task_bins[] = {
+static const char *task_bins[] = {
     "./gmqcc",
     "./qcvm"
 };
@@ -60,7 +63,7 @@ typedef struct {
     int pid;
 } popen_t;
 
-FILE ** task_popen(const char *command, const char *mode) {
+static FILE ** task_popen(const char *command, const char *mode) {
     int     inhandle  [2];
     int     outhandle [2];
     int     errhandle [2];
@@ -116,9 +119,9 @@ FILE ** task_popen(const char *command, const char *mode) {
         close(errhandle[0]);
 
         /* see piping documentation for this sillyness :P */
-        close(0), dup(inhandle [0]);
-        close(1), dup(outhandle[1]);
-        close(2), dup(errhandle[1]);
+        close(0); (void)!dup(inhandle [0]);
+        close(1); (void)!dup(outhandle[1]);
+        close(2); (void)!dup(errhandle[1]);
 
         execvp(*argv, argv);
         exit(EXIT_FAILURE);
@@ -137,7 +140,7 @@ task_popen_error_0:
     return NULL;
 }
 
-int task_pclose(FILE **handles) {
+static int task_pclose(FILE **handles) {
     popen_t *data   = (popen_t*)handles;
     int      status = 0;
 
@@ -152,32 +155,46 @@ int task_pclose(FILE **handles) {
     return status;
 }
 #else
-    /*
-     * Bidirectional piping implementation for windows using CreatePipe and DuplicateHandle +
-     * other hacks.
-     */
     typedef struct {
-        int __dummy;
-        /* TODO: implement */
+        FILE *handles[3];
+        char  name_err[L_tmpnam];
+        char  name_out[L_tmpnam];
     } popen_t;
 
-    FILE **task_popen(const char *command, const char *mode) {
-        (void)command;
-        (void)mode;
+    static FILE **task_popen(const char *command, const char *mode) {
+        char    *cmd  = NULL;
+        popen_t *open = (popen_t*)mem_a(sizeof(popen_t));
 
-        /* TODO: implement */
-        return NULL;
+        tmpnam(open->name_err);
+        tmpnam(open->name_out);
+
+        (void)mode; /* excluded */
+
+        util_asprintf(&cmd, "%s -redirout=%s -redirerr=%s", command, open->name_out, open->name_err);
+
+        system(cmd); /* HACK */
+        open->handles[0] = NULL;
+        open->handles[1] = fs_file_open(open->name_out, "r");
+        open->handles[2] = fs_file_open(open->name_err, "r");
+
+        mem_d(cmd);
+
+        return open->handles;
     }
 
-    void task_pclose(FILE **files) {
-        /* TODO: implement */
-        (void)files;
-        return;
+    static void task_pclose(FILE **files) {
+        popen_t *open = ((popen_t*)files);
+        fs_file_close(files[1]);
+        fs_file_close(files[2]);
+        remove(open->name_err);
+        remove(open->name_out);
+
+        mem_d(open);
     }
 #endif /*! _WIN32 */
 
-#define TASK_COMPILE 0
-#define TASK_EXECUTE 1
+#define TASK_COMPILE    0
+#define TASK_EXECUTE    1
 /*
  * Task template system:
  *  templates are rules for a specific test, used to create a "task" that
@@ -210,7 +227,7 @@ int task_pclose(FILE **handles) {
  *                  This will perform compilation and execution
  *              -fail
  *                  This will perform compilation, but requires
- *                  the compilation to fail in order to succeed.   
+ *                  the compilation to fail in order to succeed.
  *
  *          This must be provided, this tag is NOT optional.
  *
@@ -267,8 +284,9 @@ typedef struct {
  * This is very much like a compiler code generator :-).  This generates
  * a value from some data observed from the compiler.
  */
-bool task_template_generate(task_template_t *tmpl, char tag, const char *file, size_t line, char *value, size_t *pad) {
+static bool task_template_generate(task_template_t *tmpl, char tag, const char *file, size_t line, char *value, size_t *pad) {
     size_t desclen = 0;
+    size_t filelen = 0;
     char **destval = NULL;
 
     if (!tmpl)
@@ -282,7 +300,7 @@ bool task_template_generate(task_template_t *tmpl, char tag, const char *file, s
         case 'I': destval = &tmpl->sourcefile;     break;
         case 'F': destval = &tmpl->testflags;      break;
         default:
-            con_printmsg(LVL_ERROR, __FILE__, __LINE__, "internal error",
+            con_printmsg(LVL_ERROR, __FILE__, __LINE__, 0, "internal error",
                 "invalid tag `%c:` during code generation\n",
                 tag
             );
@@ -294,7 +312,7 @@ bool task_template_generate(task_template_t *tmpl, char tag, const char *file, s
      * assigned value.
      */
     if (*destval) {
-        con_printmsg(LVL_ERROR, file, line, "compile error",
+        con_printmsg(LVL_ERROR, file, line, 0, /*TODO: column for match*/ "compile error",
             "tag `%c:` already assigned value: %s\n",
             tag, *destval
         );
@@ -328,15 +346,18 @@ bool task_template_generate(task_template_t *tmpl, char tag, const char *file, s
         /*
          * Create some padding for the description to align the
          * printing of the rules file.
-         */  
+         */
         if ((desclen = strlen(tmpl->description)) > pad[0])
             pad[0] = desclen;
     }
 
+    if ((filelen = strlen(file)) > pad[2])
+        pad[2] = filelen;
+
     return true;
 }
 
-bool task_template_parse(const char *file, task_template_t *tmpl, FILE *fp, size_t *pad) {
+static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *fp, size_t *pad) {
     char  *data = NULL;
     char  *back = NULL;
     size_t size = 0;
@@ -359,7 +380,7 @@ bool task_template_parse(const char *file, task_template_t *tmpl, FILE *fp, size
              */
             case '/':
                 if (data[1] != '/') {
-                    con_printmsg(LVL_ERROR, file, line, "tmpl parse error",
+                    con_printmsg(LVL_ERROR, file, line, 0, /*TODO: column for match*/ "tmpl parse error",
                         "invalid character `/`, perhaps you meant `//` ?");
 
                     mem_d(back);
@@ -389,14 +410,14 @@ bool task_template_parse(const char *file, task_template_t *tmpl, FILE *fp, size
             case 'I':
             case 'F':
                 if (data[1] != ':') {
-                    con_printmsg(LVL_ERROR, file, line, "tmpl parse error",
+                    con_printmsg(LVL_ERROR, file, line, 0, /*TODO: column for match*/ "tmpl parse error",
                         "expected `:` after `%c`",
                         *data
                     );
                     goto failure;
                 }
                 if (!task_template_generate(tmpl, *data, file, line, &data[3], pad)) {
-                    con_printmsg(LVL_ERROR, file, line, "tmpl compile error",
+                    con_printmsg(LVL_ERROR, file, line, 0, /*TODO: column for match*/ "tmpl compile error",
                         "failed to generate for given task\n"
                     );
                     goto failure;
@@ -411,7 +432,7 @@ bool task_template_parse(const char *file, task_template_t *tmpl, FILE *fp, size
             {
                 char *value = &data[3];
                 if (data[1] != ':') {
-                    con_printmsg(LVL_ERROR, file, line, "tmpl parse error",
+                    con_printmsg(LVL_ERROR, file, line, 0, /*TODO: column for match*/ "tmpl parse error",
                         "expected `:` after `%c`",
                         *data
                     );
@@ -436,7 +457,7 @@ bool task_template_parse(const char *file, task_template_t *tmpl, FILE *fp, size
             }
 
             default:
-                con_printmsg(LVL_ERROR, file, line, "tmpl parse error",
+                con_printmsg(LVL_ERROR, file, line, 0, /*TODO: column for match*/ "tmpl parse error",
                     "invalid tag `%c`", *data
                 );
                 goto failure;
@@ -462,7 +483,7 @@ failure:
  * Nullifies the template data: used during initialization of a new
  * template and free.
  */
-void task_template_nullify(task_template_t *tmpl) {
+static void task_template_nullify(task_template_t *tmpl) {
     if (!tmpl)
         return;
 
@@ -477,14 +498,14 @@ void task_template_nullify(task_template_t *tmpl) {
     tmpl->testflags      = NULL;
 }
 
-task_template_t *task_template_compile(const char *file, const char *dir, size_t *pad) {
+static task_template_t *task_template_compile(const char *file, const char *dir, size_t *pad) {
     /* a page should be enough */
     char             fullfile[4096];
     size_t           filepadd = 0;
     FILE            *tempfile = NULL;
     task_template_t *tmpl     = NULL;
 
-    snprintf(fullfile,    sizeof(fullfile), "%s/%s", dir, file);
+    util_snprintf(fullfile,    sizeof(fullfile), "%s/%s", dir, file);
 
     tempfile = fs_file_open(fullfile, "r");
     tmpl     = (task_template_t*)mem_a(sizeof(task_template_t));
@@ -493,7 +514,7 @@ task_template_t *task_template_compile(const char *file, const char *dir, size_t
     /*
      * Create some padding for the printing to align the
      * printing of the rules file to the console.
-     */  
+     */
     if ((filepadd = strlen(fullfile)) > pad[1])
         pad[1] = filepadd;
 
@@ -563,7 +584,13 @@ task_template_t *task_template_compile(const char *file, const char *dir, size_t
             con_err("template compile warning: %s erroneous tag `E:` when only failing\n", file);
         if (tmpl->comparematch)
             con_err("template compile warning: %s erroneous tag `M:` when only failing\n", file);
-        goto success;
+    } else if (!strcmp(tmpl->proceduretype, "-pp")) {
+        if (tmpl->executeflags)
+            con_err("template compile warning: %s erroneous tag `E:` when only preprocessing\n", file);
+        if (!tmpl->comparematch) {
+            con_err("template compile error: %s missing `M:` tag (use `$null` for exclude)\n", file);
+            goto failure;
+        }
     } else {
         con_err("template compile error: %s invalid procedure type: %s\n", file, tmpl->proceduretype);
         goto failure;
@@ -585,7 +612,7 @@ failure:
     return NULL;
 }
 
-void task_template_destroy(task_template_t **tmpl) {
+static void task_template_destroy(task_template_t **tmpl) {
     if (!tmpl)
         return;
 
@@ -630,13 +657,13 @@ typedef struct {
     bool             compiled;
 } task_t;
 
-task_t *task_tasks = NULL;
+static task_t *task_tasks = NULL;
 
 /*
  * Read a directory and searches for all template files in it
  * which is later used to run all tests.
  */
-bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
+static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
     bool             success = true;
     DIR             *dir;
     struct dirent   *files;
@@ -647,7 +674,7 @@ bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
     dir = fs_dir_open(curdir);
 
     while ((files = fs_dir_read(dir))) {
-        snprintf(buffer,   sizeof(buffer), "%s/%s", curdir, files->d_name);
+        util_snprintf(buffer, sizeof(buffer), "%s/%s", curdir, files->d_name);
 
         if (stat(buffer, &directory) == -1) {
             con_err("internal error: stat failed, aborting\n");
@@ -687,52 +714,82 @@ bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
              * to test compile flags for all tests.  This needs to be
              * BEFORE other flags (so that the .tmpl can override them)
              */
+            #ifdef _MSC_VER
+            {
+                char   buffer[4096];
+                size_t size;
+                getenv_s(&size, buffer, sizeof(buffer), "QCFLAGS");
+                qcflags = buffer;
+            }
+            #else
             qcflags = getenv("QCFLAGS");
+            #endif
 
             /*
              * Generate the command required to open a pipe to a process
              * which will be refered to with a handle in the task for
              * reading the data from the pipe.
              */
-            if (qcflags) {
-                if (tmpl->testflags && !strcmp(tmpl->testflags, "-no-defs")) {
-                    snprintf(buf, sizeof(buf), "%s %s/%s %s %s -o %s",
-                        task_bins[TASK_COMPILE],
-                        curdir,
-                        tmpl->sourcefile,
-                        qcflags,
-                        tmpl->compileflags,
-                        tmpl->tempfilename
-                    );
+            if (strcmp(tmpl->proceduretype, "-pp")) {
+                if (qcflags) {
+                    if (tmpl->testflags && !strcmp(tmpl->testflags, "-no-defs")) {
+                        util_snprintf(buf, sizeof(buf), "%s %s/%s %s %s -o %s",
+                            task_bins[TASK_COMPILE],
+                            curdir,
+                            tmpl->sourcefile,
+                            qcflags,
+                            tmpl->compileflags,
+                            tmpl->tempfilename
+                        );
+                    } else {
+                        util_snprintf(buf, sizeof(buf), "%s %s/%s %s/%s %s %s -o %s",
+                            task_bins[TASK_COMPILE],
+                            curdir,
+                            defs,
+                            curdir,
+                            tmpl->sourcefile,
+                            qcflags,
+                            tmpl->compileflags,
+                            tmpl->tempfilename
+                        );
+                    }
                 } else {
-                    snprintf(buf, sizeof(buf), "%s %s/%s %s/%s %s %s -o %s",
-                        task_bins[TASK_COMPILE],
-                        curdir,
-                        defs,
-                        curdir,
-                        tmpl->sourcefile,
-                        qcflags,
-                        tmpl->compileflags,
-                        tmpl->tempfilename
-                    );
+                    if (tmpl->testflags && !strcmp(tmpl->testflags, "-no-defs")) {
+                        util_snprintf(buf, sizeof(buf), "%s %s/%s %s -o %s",
+                            task_bins[TASK_COMPILE],
+                            curdir,
+                            tmpl->sourcefile,
+                            tmpl->compileflags,
+                            tmpl->tempfilename
+                        );
+                    } else {
+                        util_snprintf(buf, sizeof(buf), "%s %s/%s %s/%s %s -o %s",
+                            task_bins[TASK_COMPILE],
+                            curdir,
+                            defs,
+                            curdir,
+                            tmpl->sourcefile,
+                            tmpl->compileflags,
+                            tmpl->tempfilename
+                        );
+                    }
                 }
             } else {
+                /* Preprocessing (qcflags mean shit all here we don't allow them) */
                 if (tmpl->testflags && !strcmp(tmpl->testflags, "-no-defs")) {
-                    snprintf(buf, sizeof(buf), "%s %s/%s %s -o %s",
+                    util_snprintf(buf, sizeof(buf), "%s -E %s/%s -o %s",
                         task_bins[TASK_COMPILE],
                         curdir,
                         tmpl->sourcefile,
-                        tmpl->compileflags,
                         tmpl->tempfilename
                     );
                 } else {
-                    snprintf(buf, sizeof(buf), "%s %s/%s %s/%s %s -o %s",
+                    util_snprintf(buf, sizeof(buf), "%s -E %s/%s %s/%s -o %s",
                         task_bins[TASK_COMPILE],
                         curdir,
                         defs,
                         curdir,
                         tmpl->sourcefile,
-                        tmpl->compileflags,
                         tmpl->tempfilename
                     );
                 }
@@ -755,14 +812,14 @@ bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
              * Open up some file desciptors for logging the stdout/stderr
              * to our own.
              */
-            snprintf(buf,  sizeof(buf), "%s.stdout", tmpl->tempfilename);
+            util_snprintf(buf,  sizeof(buf), "%s.stdout", tmpl->tempfilename);
             task.stdoutlogfile = util_strdup(buf);
             if (!(task.stdoutlog     = fs_file_open(buf, "w"))) {
                 con_err("error opening %s for stdout\n", buf);
                 continue;
             }
 
-            snprintf(buf,  sizeof(buf), "%s.stderr", tmpl->tempfilename);
+            util_snprintf(buf,  sizeof(buf), "%s.stderr", tmpl->tempfilename);
             task.stderrlogfile = util_strdup(buf);
             if (!(task.stderrlog = fs_file_open(buf, "w"))) {
                 con_err("error opening %s for stderr\n", buf);
@@ -786,7 +843,7 @@ bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
  * Task precleanup removes any existing temporary files or log files
  * left behind from a previous invoke of the test-suite.
  */
-void task_precleanup(const char *curdir) {
+static void task_precleanup(const char *curdir) {
     DIR             *dir;
     struct dirent   *files;
     char             buffer[4096];
@@ -798,7 +855,7 @@ void task_precleanup(const char *curdir) {
             strstr(files->d_name, ".stdout") ||
             strstr(files->d_name, ".stderr"))
         {
-            snprintf(buffer, sizeof(buffer), "%s/%s", curdir, files->d_name);
+            util_snprintf(buffer, sizeof(buffer), "%s/%s", curdir, files->d_name);
             if (remove(buffer))
                 con_err("error removing temporary file: %s\n", buffer);
             else
@@ -809,7 +866,7 @@ void task_precleanup(const char *curdir) {
     fs_dir_close(dir);
 }
 
-void task_destroy(void) {
+static void task_destroy(void) {
     /*
      * Free all the data in the task list and finally the list itself
      * then proceed to cleanup anything else outside the program like
@@ -828,7 +885,7 @@ void task_destroy(void) {
         /*
          * Only remove the log files if the test actually compiled otherwise
          * forget about it (or if it didn't compile, and the procedure type
-         * was set to -fail (meaning it shouldn't compile) .. stil remove) 
+         * was set to -fail (meaning it shouldn't compile) .. stil remove)
          */
         if (task_tasks[i].compiled || !strcmp(task_tasks[i].tmpl->proceduretype, "-fail")) {
             if (remove(task_tasks[i].stdoutlogfile))
@@ -855,39 +912,52 @@ void task_destroy(void) {
 /*
  * This executes the QCVM task for a specificly compiled progs.dat
  * using the template passed into it for call-flags and user defined
- * messages.
+ * messages IF the procedure type is -execute, otherwise it matches
+ * the preprocessor output.
  */
-bool task_execute(task_template_t *tmpl, char ***line) {
+static bool task_trymatch(task_template_t *tmpl, char ***line) {
     bool     success = true;
+    bool     preprocessing = false;
     FILE    *execute;
     char     buffer[4096];
     memset  (buffer,0,sizeof(buffer));
 
-    /*
-     * Drop the execution flags for the QCVM if none where
-     * actually specified.
-     */
-    if (!strcmp(tmpl->executeflags, "$null")) {
-        snprintf(buffer,  sizeof(buffer), "%s %s",
-            task_bins[TASK_EXECUTE],
-            tmpl->tempfilename
+    if (strcmp(tmpl->proceduretype, "-pp")) {
+        /*
+         * Drop the execution flags for the QCVM if none where
+         * actually specified.
+         */
+        if (!strcmp(tmpl->executeflags, "$null")) {
+            util_snprintf(buffer,  sizeof(buffer), "%s %s",
+                task_bins[TASK_EXECUTE],
+                tmpl->tempfilename
+            );
+        } else {
+            util_snprintf(buffer,  sizeof(buffer), "%s %s %s",
+                task_bins[TASK_EXECUTE],
+                tmpl->executeflags,
+                tmpl->tempfilename
+            );
+        }
+
+        util_debug("TEST", "executing qcvm: `%s` [%s]\n",
+            tmpl->description,
+            buffer
         );
+
+        execute = popen(buffer, "r");
+        if (!execute)
+            return false;
     } else {
-        snprintf(buffer,  sizeof(buffer), "%s %s %s",
-            task_bins[TASK_EXECUTE],
-            tmpl->executeflags,
-            tmpl->tempfilename
-        );
+        /*
+         * we're preprocessing, which means we need to read int
+         * the produced file and do some really weird shit.
+         */
+        if (!(execute = fs_file_open(tmpl->tempfilename, "r")))
+            return false;
+
+        preprocessing = true;
     }
-
-    util_debug("TEST", "executing qcvm: `%s` [%s]\n",
-        tmpl->description,
-        buffer
-    );
-
-    execute = popen(buffer, "r");
-    if (!execute)
-        return false;
 
     /*
      * Now lets read the lines and compare them to the matches we expect
@@ -903,7 +973,10 @@ bool task_execute(task_template_t *tmpl, char ***line) {
                     tmpl->description,
                     tmpl->rulesfile
                 );
-                pclose(execute);
+                if (preprocessing)
+                    fs_file_close(execute);
+                else
+                    pclose(execute);
                 return false;
             }
 
@@ -913,6 +986,13 @@ bool task_execute(task_template_t *tmpl, char ***line) {
              */
             if  (strrchr(data, '\n'))
                 *strrchr(data, '\n') = '\0';
+
+            /*
+             * If data is just null now, that means the line was an empty
+             * one and for that, we just ignore it.
+             */
+            if (!*data)
+                continue;
 
             if (vec_size(tmpl->comparematch) > compare) {
                 if (strcmp(data, tmpl->comparematch[compare++]))
@@ -924,7 +1004,7 @@ bool task_execute(task_template_t *tmpl, char ***line) {
             /*
              * Copy to output vector for diagnostics if execution match
              * fails.
-             */  
+             */
             vec_push(*line, data);
 
             /* reset */
@@ -934,8 +1014,23 @@ bool task_execute(task_template_t *tmpl, char ***line) {
         mem_d(data);
         data = NULL;
     }
-    pclose(execute);
+
+    if (!preprocessing)
+        pclose(execute);
+    else
+        fs_file_close(execute);
+
     return success;
+}
+
+static const char *task_type(task_template_t *tmpl) {
+    if (!strcmp(tmpl->proceduretype, "-pp"))
+        return "type: preprocessor";
+    if (!strcmp(tmpl->proceduretype, "-execute"))
+        return "type: execution";
+    if (!strcmp(tmpl->proceduretype, "-compile"))
+        return "type: compile";
+    return "type: fail";
 }
 
 /*
@@ -945,7 +1040,7 @@ bool task_execute(task_template_t *tmpl, char ***line) {
  * from thin air and executed INLINE.
  */
 #include <math.h>
-void task_schedualize(size_t *pad) {
+static void task_schedualize(size_t *pad) {
     char   space[2][64];
     bool   execute  = false;
     char  *data     = NULL;
@@ -954,12 +1049,12 @@ void task_schedualize(size_t *pad) {
     size_t i        = 0;
     size_t j        = 0;
 
-    snprintf(space[0], sizeof(space[0]), "%d", (int)vec_size(task_tasks));
+    util_snprintf(space[0], sizeof(space[0]), "%d", (int)vec_size(task_tasks));
 
     for (; i < vec_size(task_tasks); i++) {
         memset(space[1], 0, sizeof(space[1]));
-        snprintf(space[1], sizeof(space[1]), "%d", (int)(i + 1));
-        
+        util_snprintf(space[1], sizeof(space[1]), "%d", (int)(i + 1));
+
         con_out("test #%u %*s", i + 1, strlen(space[0]) - strlen(space[1]), "");
 
         util_debug("TEST", "executing task: %d: %s\n", i, task_tasks[i].tmpl->description);
@@ -967,7 +1062,8 @@ void task_schedualize(size_t *pad) {
          * Generate a task from thin air if it requires execution in
          * the QCVM.
          */
-        execute = !!(!strcmp(task_tasks[i].tmpl->proceduretype, "-execute"));
+        execute = !! (!strcmp(task_tasks[i].tmpl->proceduretype, "-execute")) ||
+                     (!strcmp(task_tasks[i].tmpl->proceduretype, "-pp"));
 
         /*
          * We assume it compiled before we actually compiled :).  On error
@@ -1005,36 +1101,48 @@ void task_schedualize(size_t *pad) {
         }
 
         if (!task_tasks[i].compiled && strcmp(task_tasks[i].tmpl->proceduretype, "-fail")) {
-            con_err("failure: `%s` (failed to compile) see %s.stdout and %s.stderr [%s]\n",
+            con_out("failure:   `%s` %*s %*s\n",
                 task_tasks[i].tmpl->description,
-                task_tasks[i].tmpl->tempfilename,
-                task_tasks[i].tmpl->tempfilename,
-                task_tasks[i].tmpl->rulesfile
+                (pad[0] + pad[1] - strlen(task_tasks[i].tmpl->description)) + (strlen(task_tasks[i].tmpl->rulesfile) - pad[1]),
+                task_tasks[i].tmpl->rulesfile,
+                (pad[1] + pad[2] - strlen(task_tasks[i].tmpl->rulesfile)) + (strlen("(failed to compile)") - pad[2]),
+                "(failed to compile)"
             );
             continue;
         }
 
         if (!execute) {
-            con_out("succeeded: `%s` %*s\n",
+            con_out("succeeded: `%s` %*s %*s\n",
                 task_tasks[i].tmpl->description,
-                (pad[0] + pad[1] - strlen(task_tasks[i].tmpl->description)) +
-                (strlen(task_tasks[i].tmpl->rulesfile) - pad[1]),
-                task_tasks[i].tmpl->rulesfile
-                
+                (pad[0] + pad[1] - strlen(task_tasks[i].tmpl->description)) + (strlen(task_tasks[i].tmpl->rulesfile) - pad[1]),
+                task_tasks[i].tmpl->rulesfile,
+                (pad[1] + pad[2] - strlen(task_tasks[i].tmpl->rulesfile)) + (strlen(task_type(task_tasks[i].tmpl)) - pad[2]),
+                task_type(task_tasks[i].tmpl)
+
             );
             continue;
         }
 
         /*
          * If we made it here that concludes the task is to be executed
-         * in the virtual machine.
+         * in the virtual machine (or the preprocessor output needs to
+         * be matched).
          */
-        if (!task_execute(task_tasks[i].tmpl, &match)) {
+        if (!task_trymatch(task_tasks[i].tmpl, &match)) {
             size_t d = 0;
 
-            con_err("failure: `%s` (invalid results from execution) [%s]\n",
+            con_out("failure:   `%s` %*s %*s\n",
                 task_tasks[i].tmpl->description,
-                task_tasks[i].tmpl->rulesfile
+                (pad[0] + pad[1] - strlen(task_tasks[i].tmpl->description)) + (strlen(task_tasks[i].tmpl->rulesfile) - pad[1]),
+                task_tasks[i].tmpl->rulesfile,
+                (pad[1] + pad[2] - strlen(task_tasks[i].tmpl->rulesfile)) + (strlen(
+                    (strcmp(task_tasks[i].tmpl->proceduretype, "-pp"))
+                        ? "(invalid results from execution)"
+                        : "(invalid results from preprocessing)"
+                ) - pad[2]),
+                (strcmp(task_tasks[i].tmpl->proceduretype, "-pp"))
+                    ? "(invalid results from execution)"
+                    : "(invalid results from preprocessing)"
             );
 
             /*
@@ -1042,7 +1150,7 @@ void task_schedualize(size_t *pad) {
              * handler for the all the given matches in the template file and
              * what was actually returned from executing.
              */
-            con_err("    Expected From %u Matches: (got %u Matches)\n",
+            con_out("    Expected From %u Matches: (got %u Matches)\n",
                 vec_size(task_tasks[i].tmpl->comparematch),
                 vec_size(match)
             );
@@ -1050,25 +1158,25 @@ void task_schedualize(size_t *pad) {
                 char  *select = task_tasks[i].tmpl->comparematch[d];
                 size_t length = 40 - strlen(select);
 
-                con_err("        Expected: \"%s\"", select);
+                con_out("        Expected: \"%s\"", select);
                 while (length --)
-                    con_err(" ");
-                con_err("| Got: \"%s\"\n", (d >= vec_size(match)) ? "<<nothing else to compare>>" : match[d]);
+                    con_out(" ");
+                con_out("| Got: \"%s\"\n", (d >= vec_size(match)) ? "<<nothing else to compare>>" : match[d]);
             }
 
             /*
              * Print the non-expected out (since we are simply not expecting it)
              * This will help track down bugs in template files that fail to match
              * something.
-             */  
+             */
             if (vec_size(match) > vec_size(task_tasks[i].tmpl->comparematch)) {
                 for (d = 0; d < vec_size(match) - vec_size(task_tasks[i].tmpl->comparematch); d++) {
-                    con_err("        Expected: Nothing                                   | Got: \"%s\"\n",
+                    con_out("        Expected: Nothing                                   | Got: \"%s\"\n",
                         match[d + vec_size(task_tasks[i].tmpl->comparematch)]
                     );
                 }
             }
-                    
+
 
             for (j = 0; j < vec_size(match); j++)
                 mem_d(match[j]);
@@ -1079,12 +1187,13 @@ void task_schedualize(size_t *pad) {
             mem_d(match[j]);
         vec_free(match);
 
-        con_out("succeeded: `%s` %*s\n",
+        con_out("succeeded: `%s` %*s %*s\n",
             task_tasks[i].tmpl->description,
-            (pad[0] + pad[1] - strlen(task_tasks[i].tmpl->description)) +
-            (strlen(task_tasks[i].tmpl->rulesfile) - pad[1]),
-            task_tasks[i].tmpl->rulesfile
-            
+            (pad[0] + pad[1] - strlen(task_tasks[i].tmpl->description)) + (strlen(task_tasks[i].tmpl->rulesfile) - pad[1]),
+            task_tasks[i].tmpl->rulesfile,
+            (pad[1] + pad[2] - strlen(task_tasks[i].tmpl->rulesfile)) + (strlen(task_type(task_tasks[i].tmpl))- pad[2]),
+            task_type(task_tasks[i].tmpl)
+
         );
     }
     mem_d(data);
@@ -1104,21 +1213,22 @@ void task_schedualize(size_t *pad) {
  *
  * It expects con_init() was called before hand.
  */
-GMQCC_WARN bool test_perform(const char *curdir, const char *defs) {
+static GMQCC_WARN bool test_perform(const char *curdir, const char *defs) {
     static const char *default_defs = "defs.qh";
 
     size_t pad[] = {
-        0, 0
+        /* test ### [succeed/fail]: `description`      [tests/template.tmpl]     [type] */
+                    0,                                 0,                        0
     };
 
     /*
      * If the default definition file isn't set to anything.  We will
      * use the default_defs here, which is "defs.qc"
-     */   
+     */
     if (!defs) {
         defs = default_defs;
     }
-        
+
 
     task_precleanup(curdir);
     if (!task_propagate(curdir, pad, defs)) {
@@ -1176,6 +1286,7 @@ int main(int argc, char **argv) {
     char         *defs     = NULL;
 
     con_init();
+    OPTS_OPTION_U16(OPTION_MEMDUMPCOLS) = 16;
 
     /*
      * Command line option parsing commences now We only need to support
@@ -1214,7 +1325,7 @@ int main(int argc, char **argv) {
     }
     con_change(redirout, redirerr);
     succeed = test_perform("tests", defs);
-    util_meminfo();
+    stat_info();
 
 
     return (succeed) ? EXIT_SUCCESS : EXIT_FAILURE;
