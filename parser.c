@@ -30,8 +30,9 @@
 
 /* beginning of locals */
 #define PARSER_HT_LOCALS  2
-#define PARSER_HT_SIZE    128
-#define TYPEDEF_HT_SIZE   16
+
+#define PARSER_HT_SIZE    512
+#define TYPEDEF_HT_SIZE   512
 
 typedef struct parser_s {
     lex_file *lex;
@@ -48,6 +49,7 @@ typedef struct parser_s {
     size_t         translated;
 
     ht ht_imm_string;
+    ht ht_imm_string_dotranslate;
 
     /* must be deleted first, they reference immediates and values */
     ast_value    **accessors;
@@ -272,17 +274,15 @@ static char *parser_strdup(const char *str)
 
 static ast_value* parser_const_string(parser_t *parser, const char *str, bool dotranslate)
 {
-    size_t hash = util_hthash(parser->ht_imm_string, str);
+    ht ht_string = (dotranslate)
+        ? parser->ht_imm_string_dotranslate
+        : parser->ht_imm_string;
+
     ast_value *out;
-    if ( (out = (ast_value*)util_htgeth(parser->ht_imm_string, str, hash)) ) {
-        if (dotranslate && out->name[0] == '#') {
-            char name[32];
-            util_snprintf(name, sizeof(name), "dotranslate_%lu", (unsigned long)(parser->translated++));
-            ast_value_set_name(out, name);
-            out->expression.flags |= AST_FLAG_INCLUDE_DEF;
-        }
+    size_t     hash = util_hthash(ht_string, str);
+
+    if ((out = (ast_value*)util_htgeth(ht_string, str, hash)))
         return out;
-    }
     /*
     for (i = 0; i < vec_size(parser->imm_string); ++i) {
         if (!strcmp(parser->imm_string[i]->constval.vstring, str))
@@ -296,12 +296,14 @@ static ast_value* parser_const_string(parser_t *parser, const char *str, bool do
         out->expression.flags |= AST_FLAG_INCLUDE_DEF;
     } else
         out = ast_value_new(parser_ctx(parser), "#IMMEDIATE", TYPE_STRING);
+
     out->cvq      = CV_CONST;
     out->hasvalue = true;
     out->isimm    = true;
     out->constval.vstring = parser_strdup(str);
     vec_push(parser->imm_string, out);
-    util_htseth(parser->ht_imm_string, str, hash, out);
+    util_htseth(ht_string, str, hash, out);
+
     return out;
 }
 
@@ -964,7 +966,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             if (exprs[1]->vtype != TYPE_FLOAT) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
-                compile_error(ctx, "invalid types used in expression: cannot divide tyeps %s and %s", ty1, ty2);
+                compile_error(ctx, "invalid types used in expression: cannot divide types %s and %s", ty1, ty2);
                 return false;
             }
             if (exprs[0]->vtype == TYPE_FLOAT) {
@@ -995,7 +997,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
-                compile_error(ctx, "invalid types used in expression: cannot divide tyeps %s and %s", ty1, ty2);
+                compile_error(ctx, "invalid types used in expression: cannot divide types %s and %s", ty1, ty2);
                 return false;
             }
             break;
@@ -1046,8 +1048,128 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                     exprs[0], exprs[1]);
             break;
         case opid1('^'):
-            compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor via ^");
-            return false;
+            /*
+             * Okay lets designate what the hell is an acceptable use
+             * of the ^ operator. In many vector processing units, XOR
+             * is allowed to be used on vectors, but only if the first
+             * operand is a vector, the second operand can be a float
+             * or vector. It's never legal for the first operand to be
+             * a float, and then the following operand to be a vector.
+             * Further more, the only time it is legal to do XOR otherwise
+             * is when both operand are floats. This nicely crafted if
+             * statement catches them all.
+             * 
+             * In the event that the first operand is a vector, two
+             * possible situations can arise, thus, each element of
+             * vector A (operand A) is exclusive-ORed with the corresponding
+             * element of vector B (operand B), If B is scalar, the
+             * scalar value is first replicated for each element.
+             * 
+             * The QCVM itself lacks a BITXOR instruction. Thus emulating
+             * the mathematics of it is required. The following equation
+             * is used: (LHS | RHS) & ~(LHS & RHS). However, due to the
+             * QCVM also lacking a BITNEG instruction, we need to emulate
+             * ~FOO with -1 - FOO, the whole process becoming this nicely
+             * crafted expression: (LHS | RHS) & (-1 - (LHS & RHS)).
+             * 
+             * When A is not scalar, this process is repeated for all
+             * components of vector A with the value in operand B,
+             * only if operand B is scalar. When A is not scalar, and B
+             * is also not scalar, this process is repeated for all
+             * components of the vector A with the components of vector B.
+             * Finally when A is scalar and B is scalar, this process is
+             * simply used once for A and B being LHS and RHS respectfully.
+             * 
+             * Yes the semantics are a bit strange (no pun intended).
+             * But then again BITXOR is strange itself, consdering it's
+             * commutative, assocative, and elements of the BITXOR operation
+             * are their own inverse.
+             */
+            if ( !(exprs[0]->vtype == TYPE_FLOAT  && exprs[1]->vtype == TYPE_FLOAT) &&
+                 !(exprs[0]->vtype == TYPE_VECTOR && exprs[1]->vtype == TYPE_FLOAT) &&
+                 !(exprs[0]->vtype == TYPE_VECTOR && exprs[1]->vtype == TYPE_VECTOR))
+            {
+                compile_error(ctx, "invalid types used in expression: cannot perform bit operations between types %s and %s",
+                              type_name[exprs[0]->vtype],
+                              type_name[exprs[1]->vtype]);
+                return false;
+            }
+
+            /*
+             * IF the first expression is float, the following will be too
+             * since scalar ^ vector is not allowed.
+             */
+            if (exprs[0]->vtype == TYPE_FLOAT) {
+                if(CanConstFold(exprs[0], exprs[1])) {
+                    out = (ast_expression*)parser_const_float(parser, (float)((qcint)(ConstF(0)) ^ ((qcint)(ConstF(1)))));
+                } else {
+                    ast_binary *expr = ast_binary_new(
+                        ctx,
+                        INSTR_SUB_F,
+                        (ast_expression*)parser_const_float_neg1(parser),
+                        (ast_expression*)ast_binary_new(
+                            ctx,
+                            INSTR_BITAND,
+                            exprs[0],
+                            exprs[1]
+                        )
+                    );
+                    expr->refs = AST_REF_NONE;
+                    
+                    out = (ast_expression*)
+                        ast_binary_new(
+                            ctx,
+                            INSTR_BITAND,
+                            (ast_expression*)ast_binary_new(
+                                ctx,
+                                INSTR_BITOR,
+                                exprs[0],
+                                exprs[1]
+                            ),
+                            (ast_expression*)expr
+                        );
+                }
+            } else {
+                /*
+                 * The first is a vector: vector is allowed to xor with vector and
+                 * with scalar, branch here for the second operand.
+                 */
+                if (exprs[1]->vtype == TYPE_VECTOR) {
+                    /*
+                     * Xor all the values of the vector components against the
+                     * vectors components in question.
+                     */
+                    if (CanConstFold(exprs[0], exprs[1])) {
+                        out = (ast_expression*)parser_const_vector_f(
+                            parser,
+                            (float)(((qcint)(ConstV(0).x)) ^ ((qcint)(ConstV(1).x))),
+                            (float)(((qcint)(ConstV(0).y)) ^ ((qcint)(ConstV(1).y))),
+                            (float)(((qcint)(ConstV(0).z)) ^ ((qcint)(ConstV(1).z)))
+                        );
+                    } else {
+                        compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor for vector against vector");
+                        return false;
+                    }
+                } else {
+                    /*
+                     * Xor all the values of the vector components against the
+                     * scalar in question.
+                     */
+                    if (CanConstFold(exprs[0], exprs[1])) {
+                        out = (ast_expression*)parser_const_vector_f(
+                            parser,
+                            (float)(((qcint)(ConstV(0).x)) ^ ((qcint)(ConstF(1)))),
+                            (float)(((qcint)(ConstV(0).y)) ^ ((qcint)(ConstF(1)))),
+                            (float)(((qcint)(ConstV(0).z)) ^ ((qcint)(ConstF(1))))
+                        );
+                    } else {
+                        compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor for vector against float");
+                        return false;
+                    }
+                }
+            }
+                
+            break;
 
         case opid2('<','<'):
         case opid2('>','>'):
@@ -1174,7 +1296,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             } else {
                 ast_binary *eq = ast_binary_new(ctx, INSTR_EQ_F, exprs[0], exprs[1]);
 
-                eq->refs = (ast_binary_ref)false; /* references nothing */
+                eq->refs = AST_REF_NONE;
 
                     /* if (lt) { */
                 out = (ast_expression*)ast_ternary_new(ctx,
@@ -1581,7 +1703,7 @@ static bool parser_close_call(parser_t *parser, shunt *sy)
     for (i = 0; i < paramcount; ++i)
         vec_push(call->params, sy->out[fid+1 + i].out);
     vec_shrinkby(sy->out, paramcount);
-    (void)!ast_call_check_types(call);
+    (void)!ast_call_check_types(call, parser->function->vtype->expression.varparam);
     if (parser->max_param_count < paramcount)
         parser->max_param_count = paramcount;
 
@@ -1718,8 +1840,12 @@ static ast_expression* parse_vararg_do(parser_t *parser)
     ast_expression *idx, *out;
     ast_value      *typevar;
     ast_value      *funtype = parser->function->vtype;
+    lex_ctx         ctx     = parser_ctx(parser);
 
-    lex_ctx ctx = parser_ctx(parser);
+    if (!parser->function->varargs) {
+        parseerror(parser, "function has no variable argument list");
+        return NULL;
+    }
 
     if (!parser_next(parser) || parser->tok != '(') {
         parseerror(parser, "expected parameter index and type in parenthesis");
@@ -1735,9 +1861,14 @@ static ast_expression* parse_vararg_do(parser_t *parser)
         return NULL;
 
     if (parser->tok != ',') {
-        ast_unref(idx);
-        parseerror(parser, "expected comma after parameter index");
-        return NULL;
+        if (parser->tok != ')') {
+            ast_unref(idx);
+            parseerror(parser, "expected comma after parameter index");
+            return NULL;
+        }
+        /* vararg piping: ...(start) */
+        out = (ast_expression*)ast_argpipe_new(ctx, idx);
+        return out;
     }
 
     if (!parser_next(parser) || (parser->tok != TOKEN_IDENT && parser->tok != TOKEN_TYPENAME)) {
@@ -1756,22 +1887,6 @@ static ast_expression* parse_vararg_do(parser_t *parser)
         ast_unref(idx);
         ast_delete(typevar);
         parseerror(parser, "expected closing paren");
-        return NULL;
-    }
-
-#if 0
-    if (!parser_next(parser)) {
-        ast_unref(idx);
-        ast_delete(typevar);
-        parseerror(parser, "parse error after vararg");
-        return NULL;
-    }
-#endif
-
-    if (!parser->function->varargs) {
-        ast_unref(idx);
-        ast_delete(typevar);
-        parseerror(parser, "function has no variable argument list");
         return NULL;
     }
 
@@ -1940,7 +2055,7 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
                  * it in the predef table.  And diagnose it better :)
                  */
                 if (!OPTS_FLAG(FTEPP_PREDEFS) && ftepp_predef_exists(parser_tokval(parser))) {
-                    parseerror(parser, "unexpected ident: %s (use -fftepp-predef to enable pre-defined macros)", parser_tokval(parser));
+                    parseerror(parser, "unexpected identifier: %s (use -fftepp-predef to enable pre-defined macros)", parser_tokval(parser));
                     return false;
                 }
 
@@ -1959,7 +2074,7 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
                         correct = correct_str(&corr, parser->correct_variables[i], parser_tokval(parser));
                         if (strcmp(correct, parser_tokval(parser))) {
                             break;
-                        } else if (correct) {
+                        } else  {
                             mem_d(correct);
                             correct = NULL;
                         }
@@ -1968,13 +2083,13 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
 
                     if (correct) {
                         parser->diagnostic = DIAGNOSTIC_UNEXPECTED_IDENT;
-                        parseerror(parser, "unexpected ident: %s (did you mean %s?)", parser_tokval(parser), correct);
+                        parseerror(parser, "unexpected identifier: %s (did you mean %s?)", parser_tokval(parser), correct);
                         mem_d(correct);
                         return false;
                     }
                 }
                 parser->diagnostic = DIAGNOSTIC_UNEXPECTED_IDENT;
-                parseerror(parser, "unexpected ident: %s", parser_tokval(parser));
+                parseerror(parser, "unexpected identifier: %s", parser_tokval(parser));
                 return false;
             }
         }
@@ -2022,7 +2137,7 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
     while (true)
     {
         if (parser->tok == TOKEN_TYPENAME) {
-            parseerror(parser, "unexpected typename");
+            parseerror(parser, "unexpected typename `%s`", parser_tokval(parser));
             goto onerr;
         }
 
@@ -2422,7 +2537,8 @@ static ast_expression* process_condition(parser_t *parser, ast_expression *cond,
     }
 
     unary = (ast_unary*)cond;
-    while (ast_istype(cond, ast_unary) && unary->op == INSTR_NOT_F)
+    /* ast_istype dereferences cond, should test here for safety */
+    while (cond && ast_istype(cond, ast_unary) && unary->op == INSTR_NOT_F)
     {
         cond = unary->operand;
         unary->operand = NULL;
@@ -2662,7 +2778,12 @@ static bool parse_dowhile(parser_t *parser, ast_block *block, ast_expression **o
     if (vec_last(parser->breaks) != label || vec_last(parser->continues) != label) {
         parseerror(parser, "internal error: label stack corrupted");
         rv = false;
-        ast_delete(*out);
+        /*
+         * Test for NULL otherwise ast_delete dereferences null pointer
+         * and boom.
+         */
+        if (*out)
+            ast_delete(*out);
         *out = NULL;
     }
     else {
@@ -3534,7 +3655,8 @@ static bool parse_goto(parser_t *parser, ast_expression **out)
         if (!(expression = parse_expression(parser, false, true)) ||
             !(*out = parse_goto_computed(parser, &expression))) {
             parseerror(parser, "invalid goto expression");
-            ast_unref(expression);
+            if(expression)
+                ast_unref(expression);
             return false;
         }
 
@@ -4366,7 +4488,7 @@ static bool parse_function_body(parser_t *parser, ast_value *var)
     }
 
     vec_push(func->blocks, block);
-    
+
 
     parser->function = old;
     if (!parser_leaveblock(parser))
@@ -4944,32 +5066,44 @@ static ast_value *parse_arraysize(parser_t *parser, ast_value *var)
         return NULL;
     }
 
-    cexp = parse_expression_leave(parser, true, false, false);
+    if (parser->tok != ']') {
+        cexp = parse_expression_leave(parser, true, false, false);
 
-    if (!cexp || !ast_istype(cexp, ast_value)) {
-        if (cexp)
-            ast_unref(cexp);
-        ast_delete(var);
-        parseerror(parser, "expected array-size as constant positive integer");
-        return NULL;
+        if (!cexp || !ast_istype(cexp, ast_value)) {
+            if (cexp)
+                ast_unref(cexp);
+            ast_delete(var);
+            parseerror(parser, "expected array-size as constant positive integer");
+            return NULL;
+        }
+        cval = (ast_value*)cexp;
     }
-    cval = (ast_value*)cexp;
+    else {
+        cexp = NULL;
+        cval = NULL;
+    }
 
     tmp = ast_value_new(ctx, "<type[]>", TYPE_ARRAY);
     tmp->expression.next = (ast_expression*)var;
     var = tmp;
 
-    if (cval->expression.vtype == TYPE_INTEGER)
-        tmp->expression.count = cval->constval.vint;
-    else if (cval->expression.vtype == TYPE_FLOAT)
-        tmp->expression.count = cval->constval.vfloat;
-    else {
+    if (cval) {
+        if (cval->expression.vtype == TYPE_INTEGER)
+            tmp->expression.count = cval->constval.vint;
+        else if (cval->expression.vtype == TYPE_FLOAT)
+            tmp->expression.count = cval->constval.vfloat;
+        else {
+            ast_unref(cexp);
+            ast_delete(var);
+            parseerror(parser, "array-size must be a positive integer constant");
+            return NULL;
+        }
+
         ast_unref(cexp);
-        ast_delete(var);
-        parseerror(parser, "array-size must be a positive integer constant");
-        return NULL;
+    } else {
+        var->expression.count = -1;
+        var->expression.flags |= AST_FLAG_ARRAY_INIT;
     }
-    ast_unref(cexp);
 
     if (parser->tok != ']') {
         ast_delete(var);
@@ -5215,6 +5349,75 @@ static bool parser_check_qualifiers(parser_t *parser, const ast_value *var, cons
                              var->name, (av ? ": noreturn" : ""),
                              ast_ctx(proto).file, ast_ctx(proto).line,
                              (ao ? ": noreturn" : ""));
+    }
+    return true;
+}
+
+static bool create_array_accessors(parser_t *parser, ast_value *var)
+{
+    char name[1024];
+    util_snprintf(name, sizeof(name), "%s##SET", var->name);
+    if (!parser_create_array_setter(parser, var, name))
+        return false;
+    util_snprintf(name, sizeof(name), "%s##GET", var->name);
+    if (!parser_create_array_getter(parser, var, var->expression.next, name))
+        return false;
+    return true;
+}
+
+static bool parse_array(parser_t *parser, ast_value *array)
+{
+    size_t i;
+    if (array->initlist) {
+        parseerror(parser, "array already initialized elsewhere");
+        return false;
+    }
+    if (!parser_next(parser)) {
+        parseerror(parser, "parse error in array initializer");
+        return false;
+    }
+    i = 0;
+    while (parser->tok != '}') {
+        ast_value *v = (ast_value*)parse_expression_leave(parser, true, false, false);
+        if (!v)
+            return false;
+        if (!ast_istype(v, ast_value) || !v->hasvalue || v->cvq != CV_CONST) {
+            ast_unref(v);
+            parseerror(parser, "initializing element must be a compile time constant");
+            return false;
+        }
+        vec_push(array->initlist, v->constval);
+        if (v->expression.vtype == TYPE_STRING) {
+            array->initlist[i].vstring = util_strdupe(array->initlist[i].vstring);
+            ++i;
+        }
+        ast_unref(v);
+        if (parser->tok == '}')
+            break;
+        if (parser->tok != ',' || !parser_next(parser)) {
+            parseerror(parser, "expected comma or '}' in element list");
+            return false;
+        }
+    }
+    if (!parser_next(parser) || parser->tok != ';') {
+        parseerror(parser, "expected semicolon after initializer, got %s");
+        return false;
+    }
+    /*
+    if (!parser_next(parser)) {
+        parseerror(parser, "parse error after initializer");
+        return false;
+    }
+    */
+
+    if (array->expression.flags & AST_FLAG_ARRAY_INIT) {
+        if (array->expression.count != (size_t)-1) {
+            parseerror(parser, "array `%s' has already been initialized with %u elements",
+                       array->name, (unsigned)array->expression.count);
+        }
+        array->expression.count = vec_size(array->initlist);
+        if (!create_array_accessors(parser, array))
+            return false;
     }
     return true;
 }
@@ -5655,13 +5858,10 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
          * deal with arrays
          */
         if (var->expression.vtype == TYPE_ARRAY) {
-            char name[1024];
-            util_snprintf(name, sizeof(name), "%s##SET", var->name);
-            if (!parser_create_array_setter(parser, var, name))
-                goto cleanup;
-            util_snprintf(name, sizeof(name), "%s##GET", var->name);
-            if (!parser_create_array_getter(parser, var, var->expression.next, name))
-                goto cleanup;
+            if (var->expression.count != (size_t)-1) {
+                if (!create_array_accessors(parser, var))
+                    goto cleanup;
+            }
         }
         else if (!localblock && !nofields &&
                  var->expression.vtype == TYPE_FIELD &&
@@ -5838,11 +6038,10 @@ skipvar:
                 parseerror(parser, "TODO: initializers for local arrays");
                 break;
             }
-            /*
-static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma, bool truthvalue, bool with_labels);
-*/
-            parseerror(parser, "TODO: initializing global arrays is not supported yet!");
-            break;
+
+            var->hasvalue = true;
+            if (!parse_array(parser, var))
+                break;
         }
         else if (var->expression.vtype == TYPE_FUNCTION && (parser->tok == '{' || parser->tok == '['))
         {
@@ -6046,7 +6245,7 @@ static uint16_t progdefs_crc_both(uint16_t old, const char *str)
     return old;
 }
 
-static void generate_checksum(parser_t *parser)
+static void generate_checksum(parser_t *parser, ir_builder *ir)
 {
     uint16_t   crc = 0xFFFF;
     size_t     i;
@@ -6100,8 +6299,7 @@ static void generate_checksum(parser_t *parser)
         crc = progdefs_crc_both(crc, ";\n");
     }
     crc = progdefs_crc_both(crc, "} entvars_t;\n\n");
-
-    parser->code->crc = crc;
+    ir->code->crc = crc;
 }
 
 parser_t *parser_create()
@@ -6115,11 +6313,6 @@ parser_t *parser_create()
         return NULL;
 
     memset(parser, 0, sizeof(*parser));
-
-    if (!(parser->code = code_init())) {
-        mem_d(parser);
-        return NULL;
-    }
 
     for (i = 0; i < operator_count; ++i) {
         if (operators[i].id == opid1('=')) {
@@ -6141,13 +6334,15 @@ parser_t *parser_create()
     parser->aliases = util_htnew(PARSER_HT_SIZE);
 
     parser->ht_imm_string = util_htnew(512);
+    parser->ht_imm_string_dotranslate = util_htnew(512);
 
     /* corrector */
     vec_push(parser->correct_variables, correct_trie_new());
     vec_push(parser->correct_variables_score, NULL);
 
-    empty_ctx.file = "<internal>";
-    empty_ctx.line = 0;
+    empty_ctx.file   = "<internal>";
+    empty_ctx.line   = 0;
+    empty_ctx.column = 0;
     parser->nil = ast_value_new(empty_ctx, "nil", TYPE_NIL);
     parser->nil->cvq = CV_CONST;
     if (OPTS_FLAG(UNTYPED_NIL))
@@ -6259,6 +6454,7 @@ static void parser_remove_ast(parser_t *parser)
     vec_free(parser->functions);
     vec_free(parser->imm_vector);
     vec_free(parser->imm_string);
+    util_htdel(parser->ht_imm_string_dotranslate);
     util_htdel(parser->ht_imm_string);
     vec_free(parser->imm_float);
     vec_free(parser->globals);
@@ -6276,7 +6472,6 @@ static void parser_remove_ast(parser_t *parser)
     }
     vec_free(parser->correct_variables);
     vec_free(parser->correct_variables_score);
-
 
     for (i = 0; i < vec_size(parser->_typedefs); ++i)
         ast_delete(parser->_typedefs[i]);
@@ -6298,6 +6493,9 @@ static void parser_remove_ast(parser_t *parser)
     ast_value_delete(parser->const_vec[0]);
     ast_value_delete(parser->const_vec[1]);
     ast_value_delete(parser->const_vec[2]);
+    
+    if (parser->reserved_version)
+        ast_value_delete(parser->reserved_version);
 
     util_htdel(parser->aliases);
     intrin_intrinsics_destroy(parser);
@@ -6306,8 +6504,6 @@ static void parser_remove_ast(parser_t *parser)
 void parser_cleanup(parser_t *parser)
 {
     parser_remove_ast(parser);
-    code_cleanup(parser->code);
-
     mem_d(parser);
 }
 
@@ -6465,7 +6661,8 @@ bool parser_finish(parser_t *parser, const char *output)
         }
     }
 
-    generate_checksum(parser);
+    generate_checksum(parser, ir);
+
     if (OPTS_OPTION_BOOL(OPTION_DUMP))
         ir_builder_dump(ir, con_out);
     for (i = 0; i < vec_size(parser->functions); ++i) {
@@ -6487,7 +6684,7 @@ bool parser_finish(parser_t *parser, const char *output)
         if (OPTS_OPTION_BOOL(OPTION_DUMPFIN))
             ir_builder_dump(ir, con_out);
 
-        if (!ir_builder_generate(parser->code, ir, output)) {
+        if (!ir_builder_generate(ir, output)) {
             con_out("*** failed to generate output file\n");
             ir_builder_delete(ir);
             return false;

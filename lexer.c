@@ -20,7 +20,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -76,8 +75,9 @@ static bool lexwarn(lex_file *lex, int warntype, const char *fmt, ...)
     lex_ctx ctx;
     va_list ap;
 
-    ctx.file = lex->name;
-    ctx.line = lex->sline;
+    ctx.file   = lex->name;
+    ctx.line   = lex->sline;
+    ctx.column = lex->column;
 
     va_start(ap, fmt);
     r = vcompile_warning(ctx, warntype, fmt, ap);
@@ -298,7 +298,7 @@ static int lex_try_trigraph(lex_file *lex, int old)
         lex->line++;
         lex->column = 0;
     }
-    
+
     if (c2 != '?') {
         lex_ungetch(lex, c2);
         return old;
@@ -309,7 +309,7 @@ static int lex_try_trigraph(lex_file *lex, int old)
         lex->line++;
         lex->column = 0;
     }
-    
+
     switch (c3) {
         case '=': return '#';
         case '/': return '\\';
@@ -388,12 +388,12 @@ static void lex_ungetch(lex_file *lex, int ch)
 /* Idents are alphanumberic, but they start with alpha or _ */
 static bool isident_start(int ch)
 {
-    return isalpha(ch) || ch == '_';
+    return util_isalpha(ch) || ch == '_';
 }
 
 static bool isident(int ch)
 {
-    return isident_start(ch) || isdigit(ch);
+    return isident_start(ch) || util_isdigit(ch);
 }
 
 /* isxdigit_only is used when we already know it's not a digit
@@ -573,7 +573,7 @@ static int lex_skipwhite(lex_file *lex, bool hadwhite)
     do
     {
         ch = lex_getch(lex);
-        while (ch != EOF && isspace(ch)) {
+        while (ch != EOF && util_isspace(ch)) {
             if (ch == '\n') {
                 if (lex_try_pragma(lex))
                     continue;
@@ -671,7 +671,7 @@ static int lex_skipwhite(lex_file *lex, bool hadwhite)
             ch = '/';
             break;
         }
-    } while (ch != EOF && isspace(ch));
+    } while (ch != EOF && util_isspace(ch));
 
     if (haswhite) {
         lex_endtoken(lex);
@@ -707,7 +707,7 @@ static int lex_parse_frame(lex_file *lex)
     lex_token_new(lex);
 
     ch = lex_getch(lex);
-    while (ch != EOF && ch != '\n' && isspace(ch))
+    while (ch != EOF && ch != '\n' && util_isspace(ch))
         ch = lex_getch(lex);
 
     if (ch == '\n')
@@ -929,7 +929,7 @@ static int GMQCC_WARN lex_finish_digit(lex_file *lex, int lastch)
     lex_tokench(lex, ch);
 
     ch = lex_getch(lex);
-    if (ch != '.' && !isdigit(ch))
+    if (ch != '.' && !util_isdigit(ch))
     {
         if (lastch != '0' || ch != 'x')
         {
@@ -950,7 +950,7 @@ static int GMQCC_WARN lex_finish_digit(lex_file *lex, int lastch)
     {
         lex_tokench(lex, ch);
         ch = lex_getch(lex);
-        while (isdigit(ch) || (ishex && isxdigit_only(ch)))
+        while (util_isdigit(ch) || (ishex && isxdigit_only(ch)))
         {
             lex_tokench(lex, ch);
             ch = lex_getch(lex);
@@ -965,7 +965,7 @@ static int GMQCC_WARN lex_finish_digit(lex_file *lex, int lastch)
 
         /* continue digits-only */
         ch = lex_getch(lex);
-        while (isdigit(ch))
+        while (util_isdigit(ch))
         {
             lex_tokench(lex, ch);
             ch = lex_getch(lex);
@@ -1068,10 +1068,10 @@ int lex_do(lex_file *lex)
         if (!strcmp(v, "framevalue"))
         {
             ch = lex_getch(lex);
-            while (ch != EOF && isspace(ch) && ch != '\n')
+            while (ch != EOF && util_isspace(ch) && ch != '\n')
                 ch = lex_getch(lex);
 
-            if (!isdigit(ch)) {
+            if (!util_isdigit(ch)) {
                 lexerror(lex, "$framevalue requires an integer parameter");
                 return lex_do(lex);
             }
@@ -1229,7 +1229,7 @@ int lex_do(lex_file *lex)
     if (ch == '.') {
         nextch = lex_getch(lex);
         /* digits starting with a dot */
-        if (isdigit(nextch)) {
+        if (util_isdigit(nextch)) {
             lex_ungetch(lex, nextch);
             lex->tok.ttype = lex_finish_digit(lex, ch);
             lex_endtoken(lex);
@@ -1309,7 +1309,7 @@ int lex_do(lex_file *lex)
         ch == '>' || ch == '<' || /* <<, >>, <=, >=                  */
         ch == '=' || ch == '!' || /* <=>, ==, !=                     */
         ch == '&' || ch == '|' || /* &&, ||, &=, |=                  */
-        ch == '~'                 /* ~=, ~                           */
+        ch == '~' || ch == '^'    /* ~=, ~, ^                        */
     )  {
         lex_tokench(lex, ch);
 
@@ -1337,7 +1337,7 @@ int lex_do(lex_file *lex)
             }
         }
         else if (lex->flags.preprocessing &&
-                 ch == '-' && isdigit(nextch))
+                 ch == '-' && util_isdigit(nextch))
         {
             lex->tok.ttype = lex_finish_digit(lex, nextch);
             if (lex->tok.ttype == TOKEN_INTCONST)
@@ -1504,7 +1504,7 @@ int lex_do(lex_file *lex)
         return lex->tok.ttype;
     }
 
-    if (isdigit(ch))
+    if (util_isdigit(ch))
     {
         lex->tok.ttype = lex_finish_digit(lex, ch);
         lex_endtoken(lex);

@@ -21,10 +21,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
- 
+
 #include <string.h>
 #include <stdlib.h>
-#include <ctype.h>
 
 #include "gmqcc.h"
 
@@ -56,6 +55,7 @@ static uint64_t          stat_mem_allocated_total   = 0;
 static uint64_t          stat_mem_deallocated_total = 0;
 static uint64_t          stat_mem_high              = 0;
 static uint64_t          stat_mem_peak              = 0;
+static uint64_t          stat_mem_strdups           = 0;
 static uint64_t          stat_used_strdups          = 0;
 static uint64_t          stat_used_vectors          = 0;
 static uint64_t          stat_used_hashtables       = 0;
@@ -93,8 +93,8 @@ static void stat_size_put(stat_size_table_t table, size_t key, size_t value) {
     size_t hash = (key % ST_SIZE);
     while (table[hash] && table[hash]->key != key)
         hash = (hash + 1) % ST_SIZE;
-    table[hash] = (stat_size_entry_t*)mem_a(sizeof(stat_size_entry_t));
-    table[hash]->key = key;
+    table[hash]        = (stat_size_entry_t*)mem_a(sizeof(stat_size_entry_t));
+    table[hash]->key   = key;
     table[hash]->value = value;
 }
 
@@ -106,24 +106,24 @@ static void stat_size_put(stat_size_table_t table, size_t key, size_t value) {
 void *stat_mem_allocate(size_t size, size_t line, const char *file) {
     stat_mem_block_t *info = (stat_mem_block_t*)malloc(sizeof(stat_mem_block_t) + size);
     void             *data = (void*)(info + 1);
-    
+
     if(!info)
         return NULL;
-        
+
     info->line = line;
     info->size = size;
     info->file = file;
     info->prev = NULL;
     info->next = stat_mem_block_root;
-    
+
     if (stat_mem_block_root)
         stat_mem_block_root->prev = info;
-        
+
     stat_mem_block_root       = info;
     stat_mem_allocated       += size;
     stat_mem_high            += size;
     stat_mem_allocated_total ++;
-    
+
     if (stat_mem_high > stat_mem_peak)
         stat_mem_peak = stat_mem_high;
 
@@ -132,76 +132,76 @@ void *stat_mem_allocate(size_t size, size_t line, const char *file) {
 
 void stat_mem_deallocate(void *ptr) {
     stat_mem_block_t *info = NULL;
-    
+
     if (!ptr)
         return;
-        
+
     info = ((stat_mem_block_t*)ptr - 1);
-    
+
     stat_mem_deallocated       += info->size;
     stat_mem_high              -= info->size;
     stat_mem_deallocated_total ++;
-    
+
     if (info->prev) info->prev->next = info->next;
     if (info->next) info->next->prev = info->prev;
-    
+
     /* move ahead */
     if (info == stat_mem_block_root)
         stat_mem_block_root = info->next;
-        
+
     free(info);
 }
 
 void *stat_mem_reallocate(void *ptr, size_t size, size_t line, const char *file) {
     stat_mem_block_t *oldinfo = NULL;
     stat_mem_block_t *newinfo;
-    
+
     if (!ptr)
         return stat_mem_allocate(size, line, file);
-    
+
     /* stay consistent with glic */
     if (!size) {
         stat_mem_deallocate(ptr);
         return NULL;
     }
-    
+
     oldinfo = ((stat_mem_block_t*)ptr - 1);
     newinfo = ((stat_mem_block_t*)malloc(sizeof(stat_mem_block_t) + size));
-    
+
     if (!newinfo) {
         stat_mem_deallocate(ptr);
         return NULL;
     }
-    
+
     memcpy(newinfo+1, oldinfo+1, oldinfo->size);
-    
+
     if (oldinfo->prev) oldinfo->prev->next = oldinfo->next;
     if (oldinfo->next) oldinfo->next->prev = oldinfo->prev;
-    
+
     /* move ahead */
     if (oldinfo == stat_mem_block_root)
         stat_mem_block_root = oldinfo->next;
-        
+
     newinfo->line = line;
     newinfo->size = size;
     newinfo->file = file;
     newinfo->prev = NULL;
     newinfo->next = stat_mem_block_root;
-    
+
     if (stat_mem_block_root)
         stat_mem_block_root->prev = newinfo;
-    
+
     stat_mem_block_root = newinfo;
     stat_mem_allocated -= oldinfo->size;
     stat_mem_high      -= oldinfo->size;
     stat_mem_allocated += newinfo->size;
     stat_mem_high      += newinfo->size;
-    
+
     if (stat_mem_high > stat_mem_peak)
         stat_mem_peak = stat_mem_high;
-        
+
     free(oldinfo);
-    
+
     return newinfo + 1;
 }
 
@@ -213,17 +213,18 @@ void *stat_mem_reallocate(void *ptr, size_t size, size_t line, const char *file)
 char *stat_mem_strdup(const char *src, size_t line, const char *file, bool empty) {
     size_t len = 0;
     char  *ptr = NULL;
-    
+
     if (!src)
         return NULL;
-    
+
     len = strlen(src);
     if (((!empty) ? len : true) && (ptr = (char*)stat_mem_allocate(len + 1, line, file))) {
         memcpy(ptr, src, len);
         ptr[len] = '\0';
     }
-    
+
     stat_used_strdups ++;
+    stat_mem_strdups  += len;
     return ptr;
 }
 
@@ -235,7 +236,7 @@ void _util_vec_grow(void **a, size_t i, size_t s) {
     size_t             m = 0;
     stat_size_entry_t *e = NULL;
     void              *p = NULL;
-    
+
     if (*a) {
         m = 2 * d->allocated + i;
         p = mem_r(d, s * m + sizeof(vector_t));
@@ -245,7 +246,7 @@ void _util_vec_grow(void **a, size_t i, size_t s) {
         ((vector_t*)p)->used = 0;
         stat_used_vectors++;
     }
-    
+
     if (!stat_size_vectors)
         stat_size_vectors = stat_size_new();
 
@@ -271,6 +272,104 @@ typedef struct hash_node_t {
     struct hash_node_t *next;  /* next node (linked list)        */
 } hash_node_t;
 
+/*
+ * This is a patched version of the Murmur2 hashing function to use
+ * a proper pre-mix and post-mix setup. Infact this is Murmur3 for
+ * the most part just reinvented.
+ * 
+ * Murmur 2 contains an inner loop such as:
+ * while (l >= 4) {
+ *      u32 k = *(u32*)d;
+ *      k *= m;
+ *      k ^= k >> r;
+ *      k *= m;
+ * 
+ *      h *= m;
+ *      h ^= k;
+ *      d += 4;
+ *      l -= 4;
+ * }
+ * 
+ * The two u32s that form the key are the same value x (pulled from data)
+ * this premix stage will perform the same results for both values. Unrolled
+ * this produces just:
+ *  x *= m;
+ *  x ^= x >> r;
+ *  x *= m;
+ *
+ *  h *= m;
+ *  h ^= x;
+ *  h *= m;
+ *  h ^= x;
+ * 
+ * This appears to be fine, except what happens when m == 1? well x
+ * cancels out entierly, leaving just:
+ *  x ^= x >> r;
+ *  h ^= x;
+ *  h ^= x;
+ * 
+ * So all keys hash to the same value, but how often does m == 1?
+ * well, it turns out testing x for all possible values yeilds only
+ * 172,013,942 unique results instead of 2^32. So nearly ~4.6 bits
+ * are cancelled out on average!
+ * 
+ * This means we have a 14.5% (rounded) chance of colliding more, which
+ * results in another bucket/chain for the hashtable.
+ *
+ * We fix it buy upgrading the pre and post mix ssystems to align with murmur
+ * hash 3.
+ */
+#if 1
+#define GMQCC_ROTL32(X, R) (((X) << (R)) | ((X) >> (32 - (R))))
+GMQCC_INLINE size_t util_hthash(hash_table_t *ht, const char *key) {
+    const unsigned char *data   = (const unsigned char *)key;
+    const size_t         len    = strlen(key);
+    const size_t         block  = len / 4;
+    const uint32_t       mask1  = 0xCC9E2D51;
+    const uint32_t       mask2  = 0x1B873593;
+    const uint32_t      *blocks = (const uint32_t*)(data + block * 4);
+    const unsigned char *tail   = (const unsigned char *)(data + block * 4);
+
+    size_t   i;
+    uint32_t k;
+    uint32_t h = 0x1EF0 ^ len;
+
+    for (i = -block; i; i++) {
+        k  = blocks[i];
+        k *= mask1;
+        k  = GMQCC_ROTL32(k, 15);
+        k *= mask2;
+        h ^= k;
+        h  = GMQCC_ROTL32(h, 13);
+        h  = h * 5 + 0xE6546B64;
+    }
+
+    k = 0;
+    switch (len & 3) {
+        case 3:
+            k ^= tail[2] << 16;
+        case 2:
+            k ^= tail[1] << 8;
+        case 1:
+            k ^= tail[0];
+            k *= mask1;
+            k  = GMQCC_ROTL32(k, 15);
+            k *= mask2;
+            h ^= k;
+    }
+
+    h ^= len;
+    h ^= h >> 16;
+    h *= 0x85EBCA6B;
+    h ^= h >> 13;
+    h *= 0xC2B2AE35;
+    h ^= h >> 16;
+
+    return (size_t) (h % ht->size);
+}
+#undef GMQCC_ROTL32
+#else
+/* We keep the old for reference */
 GMQCC_INLINE size_t util_hthash(hash_table_t *ht, const char *key) {
     const uint32_t       mix   = 0x5BD1E995;
     const uint32_t       rot   = 24;
@@ -305,6 +404,7 @@ GMQCC_INLINE size_t util_hthash(hash_table_t *ht, const char *key) {
 
     return (size_t) (hash % ht->size);
 }
+#endif
 
 static hash_node_t *_util_htnewpair(const char *key, void *value) {
     hash_node_t *node;
@@ -332,10 +432,10 @@ static hash_node_t *_util_htnewpair(const char *key, void *value) {
 hash_table_t *util_htnew(size_t size) {
     hash_table_t      *hashtable = NULL;
     stat_size_entry_t *find      = NULL;
-    
+
     if (size < 1)
         return NULL;
-        
+
     if (!stat_size_hashtables)
         stat_size_hashtables = stat_size_new();
 
@@ -346,7 +446,7 @@ hash_table_t *util_htnew(size_t size) {
         mem_d(hashtable);
         return NULL;
     }
-    
+
     if ((find = stat_size_get(stat_size_hashtables, size)))
         find->value++;
     else {
@@ -449,7 +549,8 @@ void *code_util_str_htgeth(hash_table_t *ht, const char *key, size_t bin) {
  */
 void util_htrem(hash_table_t *ht, void (*callback)(void *data)) {
     size_t i = 0;
-    for (; i < ht->size; i++) {
+
+    for (; i < ht->size; ++i) {
         hash_node_t *n = ht->table[i];
         hash_node_t *p;
 
@@ -460,7 +561,7 @@ void util_htrem(hash_table_t *ht, void (*callback)(void *data)) {
             if (callback)
                 callback(n->value);
             p = n;
-            n = n->next;
+            n = p->next;
             mem_d(p);
         }
 
@@ -513,7 +614,7 @@ static void stat_dump_mem_contents(stat_mem_block_t *memory, uint16_t cols) {
                 con_out("%c",
                     (j >= memory->size)
                         ? ' '
-                        : (isprint(((unsigned char*)(memory + 1))[j]))
+                        : (util_isprint(((unsigned char*)(memory + 1))[j]))
                             ? 0xFF & ((unsigned char*)(memory + 1)) [j]
                             : '.'
                 );
@@ -531,13 +632,13 @@ static void stat_dump_mem_leaks(void) {
             info->file,
             info->line
         );
-        
+
         stat_dump_mem_contents(info, OPTS_OPTION_U16(OPTION_MEMDUMPCOLS));
     }
 }
 
 static void stat_dump_mem_info(void) {
-    con_out("Memory information:\n\
+    con_out("Memory Information:\n\
     Total allocations:   %llu\n\
     Total deallocations: %llu\n\
     Total allocated:     %f (MB)\n\
@@ -556,10 +657,10 @@ static void stat_dump_mem_info(void) {
 
 static void stat_dump_stats_table(stat_size_table_t table, const char *string, uint64_t *size) {
     size_t i,j;
-    
+
     if (!table)
         return;
-    
+
     for (i = 0, j = 1; i < ST_SIZE; i++) {
         stat_size_entry_t *entry;
 
@@ -568,54 +669,49 @@ static void stat_dump_stats_table(stat_size_table_t table, const char *string, u
 
         con_out(string, (unsigned)j, (unsigned)entry->key, (unsigned)entry->value);
         j++;
-        
+
         if (size)
             *size += entry->key * entry->value;
     }
 }
 
 void stat_info() {
-    if (OPTS_OPTION_BOOL(OPTION_DEBUG))
-        stat_dump_mem_leaks();
-
-    if (OPTS_OPTION_BOOL(OPTION_DEBUG) ||
-        OPTS_OPTION_BOOL(OPTION_MEMCHK))
-        stat_dump_mem_info();
-
     if (OPTS_OPTION_BOOL(OPTION_MEMCHK) ||
         OPTS_OPTION_BOOL(OPTION_STATISTICS)) {
         uint64_t mem = 0;
-        
-        con_out("\nAdditional Statistics:\n\
-    Total vectors allocated:    %llu\n\
-    Total string duplicates:    %llu\n\
-    Total hashtables allocated: %llu\n\
-    Total unique vector sizes:  %llu\n",
+
+        con_out("Memory Statistics:\n\
+    Total vectors allocated:       %llu\n\
+    Total string duplicates:       %llu\n\
+    Total string duplicate memory: %f (MB)\n\
+    Total hashtables allocated:    %llu\n\
+    Total unique vector sizes:     %llu\n",
             stat_used_vectors,
             stat_used_strdups,
+            (float)(stat_mem_strdups) / 1048576.0f,
             stat_used_hashtables,
             stat_type_vectors
         );
-        
+
         stat_dump_stats_table (
             stat_size_vectors,
-            "        %2u| # of %4u byte vectors: %u\n",
+            "        %2u| # of %5u byte vectors: %u\n",
             &mem
         );
-        
+
         con_out (
             "    Total unique hashtable sizes: %llu\n",
             stat_type_hashtables
         );
-        
+
         stat_dump_stats_table (
             stat_size_hashtables,
-            "        %2u| # of %4u element hashtables: %u\n",
+            "        %2u| # of %5u element hashtables: %u\n",
             NULL
         );
-        
+
         con_out (
-            "    Total vector memory:          %f (MB)\n",
+            "    Total vector memory:          %f (MB)\n\n",
             (float)(mem) / 1048576.0f
         );
     }
@@ -624,5 +720,12 @@ void stat_info() {
         stat_size_del(stat_size_vectors);
     if (stat_size_hashtables)
         stat_size_del(stat_size_hashtables);
+
+    if (OPTS_OPTION_BOOL(OPTION_DEBUG) ||
+        OPTS_OPTION_BOOL(OPTION_MEMCHK))
+        stat_dump_mem_info();
+
+    if (OPTS_OPTION_BOOL(OPTION_DEBUG))
+        stat_dump_mem_leaks();
 }
 #undef ST_SIZE

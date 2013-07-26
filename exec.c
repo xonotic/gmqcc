@@ -56,7 +56,7 @@ qc_program* prog_load(const char *filename, bool skipversion)
 {
     qc_program   *prog;
     prog_header   header;
-    FILE         *file   = fs_file_open(filename, "rb");
+    FILE         *file  = fs_file_open(filename, "rb");
 
     if (!file)
         return NULL;
@@ -144,6 +144,8 @@ error:
     vec_free(prog->entitydata);
     vec_free(prog->entitypool);
     mem_d(prog);
+
+    fs_file_close(file);
     return NULL;
 }
 
@@ -172,7 +174,7 @@ const char* prog_getstring(qc_program *prog, qcint str) {
     /* cast for return required for C++ */
     if (str < 0 || str >= (qcint)vec_size(prog->strings))
         return  "<<<invalid string>>>";
-        
+
     return prog->strings + str;
 }
 
@@ -302,7 +304,9 @@ static void trace_print_global(qc_program *prog, unsigned int glob, int vtype) {
     int       len;
 
     if (!glob) {
-        len = printf("<null>,");
+        if ((len = printf("<null>,")) == -1)
+            len = 0;
+
         goto done;
     }
 
@@ -760,7 +764,7 @@ static int qc_strcat(qc_program *prog) {
     size_t len1,   len2;
     qcany *str1,  *str2;
     qcany  out;
-    
+
     const char *cstr1;
     const char *cstr2;
 
@@ -786,7 +790,7 @@ static int qc_strcmp(qc_program *prog) {
 
     const char *cstr1;
     const char *cstr2;
-    
+
     if (prog->argc != 2 && prog->argc != 3) {
         fprintf(stderr, "ERROR: invalid number of arguments for strcmp/strncmp: %i, expected 2 or 3\n",
                prog->argc);
@@ -905,19 +909,19 @@ void escapestring(char* dest, const char* src)  {
   char c;
   while ((c = *(src++))) {
     switch(c) {
-      case '\t': 
+      case '\t':
         *(dest++) = '\\', *(dest++) = 't';
         break;
-      case '\n': 
+      case '\n':
         *(dest++) = '\\', *(dest++) = 'n';
         break;
-      case '\r': 
+      case '\r':
         *(dest++) = '\\', *(dest++) = 'r';
         break;
-      case '\\': 
+      case '\\':
         *(dest++) = '\\', *(dest++) = '\\';
         break;
-      case '\"': 
+      case '\"':
         *(dest++) = '\\', *(dest++) = '\"';
         break;
       default:
@@ -1046,6 +1050,8 @@ int main(int argc, char **argv) {
                 p.vtype = TYPE_STRING;
             else if (argv[1][1] == 'v')
                 p.vtype = TYPE_VECTOR;
+            else
+                p.vtype = TYPE_VOID;
 
             --argc;
             ++argv;

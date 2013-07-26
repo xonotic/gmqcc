@@ -189,7 +189,7 @@ static char *ftepp_predef_timestamp(lex_file *context) {
     /*
      * ctime and its fucking annoying newline char, no worries, we're
      * professionals here.
-     */   
+     */
     find  = ctime(&finfo.st_mtime);
     value = (char*)mem_a(strlen(find) + 1);
     memcpy(&value[1], find, (size = strlen(find)) - 1);
@@ -624,7 +624,7 @@ static bool ftepp_macro_call_params(ftepp_t *ftepp, macroparam **out_params)
             ptok = pptoken_make(ftepp);
             vec_push(mp.tokens, ptok);
             if (ftepp_next(ftepp) >= TOKEN_EOF) {
-                ftepp_error(ftepp, "unexpected EOF in macro call");
+                ftepp_error(ftepp, "unexpected end of file in macro call");
                 goto on_error;
             }
         }
@@ -637,16 +637,10 @@ static bool ftepp_macro_call_params(ftepp_t *ftepp, macroparam **out_params)
             goto on_error;
         }
         if (ftepp_next(ftepp) >= TOKEN_EOF) {
-            ftepp_error(ftepp, "unexpected EOF in macro call");
+            ftepp_error(ftepp, "unexpected end of file in macro call");
             goto on_error;
         }
     }
-    /* need to leave that up
-    if (ftepp_next(ftepp) >= TOKEN_EOF) {
-        ftepp_error(ftepp, "unexpected EOF in macro call");
-        goto on_error;
-    }
-    */
     *out_params = params;
     return true;
 

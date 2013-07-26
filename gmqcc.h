@@ -106,11 +106,6 @@ GMQCC_IND_STRING(GMQCC_VERSION_PATCH) \
 #   define GMQCC_WARN
 #   define GMQCC_USED
 #endif /*! defined(__GNUC__) || defined (__CLANG__) */
-/*
- * This is a hack to silent clang regarding empty
- * body if statements.
- */
-#define GMQCC_SUPPRESS_EMPTY_BODY do { } while (0)
 
 /*
  * Inline is not supported in < C90, however some compilers
@@ -259,7 +254,7 @@ GMQCC_IND_STRING(GMQCC_VERSION_PATCH) \
 #   include <fcntl.h>
 
     struct dirent {
-        long d_ino;
+        long               d_ino;
         unsigned short     d_reclen;
         unsigned short     d_namlen;
         char               d_name[FILENAME_MAX];
@@ -305,6 +300,25 @@ void *stat_mem_allocate  (size_t, size_t, const char *);
 /*===================================================================*/
 /*=========================== util.c ================================*/
 /*===================================================================*/
+
+/*
+ * Microsoft implements against the spec versions of ctype.h. Which
+ * means what ever the current set locale is will render the actual
+ * results of say isalpha('A') wrong for what ever retarded locale
+ * is used. Simalerly these are also implemented inefficently on
+ * some toolchains and end up becoming actual library calls. Perhaps
+ * this is why tools like yacc provide their own? Regardless implementing
+ * these as functions is equally as silly, the call overhead is not
+ * justified when this could happen on every character from an input
+ * stream. We provide our own as macros for absolute inlinability.
+ */
+#define util_isalpha(a) ((((unsigned)(a)|32)-'a') < 26)
+#define util_isdigit(a) (((unsigned)(a)-'0') < 10)
+#define util_islower(a) (((unsigned)(a)-'a') < 26)
+#define util_isupper(a) (((unsigned)(a)-'A') < 26)
+#define util_isprint(a) (((unsigned)(a)-0x20) < 0x5F)
+#define util_isspace(a) (((a) >= 9 && (a) <= 13) || (a) == ' ')
+
 bool  util_filexists     (const char *);
 bool  util_strupper      (const char *);
 bool  util_strdigit      (const char *);
@@ -721,7 +735,7 @@ typedef struct {
  * code_genstrin       -- generates string for code
  * code_alloc_field    -- allocated a field
  * code_push_statement -- keeps statements and linenumbers together
- * code_pop_statement  -- keeps statements and linenumbers together 
+ * code_pop_statement  -- keeps statements and linenumbers together
  */
 bool      code_write         (code_t *, const char *filename, const char *lno);
 GMQCC_WARN

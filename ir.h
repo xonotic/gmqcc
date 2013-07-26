@@ -267,6 +267,9 @@ typedef struct ir_builder_s
     /* there should just be this one nil */
     ir_value    *nil;
     ir_value    *reserved_va_count;
+    
+    /* code generator */
+    code_t      *code;
 } ir_builder;
 
 ir_builder*  ir_builder_new(const char *modulename);
@@ -275,13 +278,13 @@ ir_function* ir_builder_create_function(ir_builder*, const char *name, int outty
 ir_value*    ir_builder_create_global(ir_builder*, const char *name, int vtype);
 ir_value*    ir_builder_create_field(ir_builder*, const char *name, int vtype);
 ir_value*    ir_builder_get_va_count(ir_builder*);
-bool         ir_builder_generate(code_t *, ir_builder *self, const char *filename);
+bool         ir_builder_generate(ir_builder *self, const char *filename);
 void         ir_builder_dump(ir_builder*, int (*oprintf)(const char*, ...));
 
 /*
  * This code assumes 32 bit floats while generating binary
  * Blub: don't use extern here, it's annoying and shows up in nm
- * for some reason :P  
+ * for some reason :P
  */
 typedef int static_assert_is_32bit_float  [(sizeof(int32_t) == 4)?1:-1];
 typedef int static_assert_is_32bit_integer[(sizeof(qcfloat) == 4)?1:-1];
