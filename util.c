@@ -21,8 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include <stdarg.h>
-#include <errno.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
+
 #include "gmqcc.h"
 
 void util_debug(const char *area, const char *ms, ...) {
@@ -388,7 +390,7 @@ int util_asprintf(char **ret, const char *fmt, ...) {
 static uint32_t mt_state[MT_SIZE];
 static size_t   mt_index = 0;
 
-static GMQCC_INLINE void mt_generate() {
+static GMQCC_INLINE void mt_generate(void) {
     /*
      * The loop has been unrolled here: the original paper and implemenation
      * Called for the following code:

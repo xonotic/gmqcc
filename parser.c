@@ -21,8 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include <stdio.h>
-#include <stdarg.h>
+#include <string.h>
 #include <math.h>
 
 #include "gmqcc.h"
@@ -37,6 +36,8 @@
 typedef struct parser_s {
     lex_file *lex;
     int      tok;
+
+    bool     ast_cleaned;
 
     ast_expression **globals;
     ast_expression **fields;
@@ -1702,6 +1703,8 @@ static bool parser_close_paren(parser_t *parser, shunt *sy)
 static void parser_reclassify_token(parser_t *parser)
 {
     size_t i;
+    if (parser->tok >= TOKEN_START)
+        return;
     for (i = 0; i < operator_count; ++i) {
         if (!strcmp(parser_tokval(parser), operators[i].op)) {
             parser->tok = TOKEN_OPERATOR;
@@ -1948,7 +1951,7 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
                  * We should also consider adding correction tables for
                  * other things as well.
                  */
-                if (OPTS_OPTION_BOOL(OPTION_CORRECTION)) {
+                if (OPTS_OPTION_BOOL(OPTION_CORRECTION) && strlen(parser_tokval(parser)) <= 16) {
                     correction_t corr;
                     correct_init(&corr);
 
@@ -6223,9 +6226,12 @@ bool parser_compile_string(parser_t *parser, const char *name, const char *str, 
     return parser_compile(parser);
 }
 
-void parser_cleanup(parser_t *parser)
+static void parser_remove_ast(parser_t *parser)
 {
     size_t i;
+    if (parser->ast_cleaned)
+        return;
+    parser->ast_cleaned = true;
     for (i = 0; i < vec_size(parser->accessors); ++i) {
         ast_delete(parser->accessors[i]->constval.vfunc);
         parser->accessors[i]->constval.vfunc = NULL;
@@ -6294,9 +6300,12 @@ void parser_cleanup(parser_t *parser)
     ast_value_delete(parser->const_vec[2]);
 
     util_htdel(parser->aliases);
-
     intrin_intrinsics_destroy(parser);
+}
 
+void parser_cleanup(parser_t *parser)
+{
+    parser_remove_ast(parser);
     code_cleanup(parser->code);
 
     mem_d(parser);
@@ -6455,6 +6464,8 @@ bool parser_finish(parser_t *parser, const char *output)
             return false;
         }
     }
+
+    generate_checksum(parser);
     if (OPTS_OPTION_BOOL(OPTION_DUMP))
         ir_builder_dump(ir, con_out);
     for (i = 0; i < vec_size(parser->functions); ++i) {
@@ -6464,6 +6475,7 @@ bool parser_finish(parser_t *parser, const char *output)
             return false;
         }
     }
+    parser_remove_ast(parser);
 
     if (compile_Werrors) {
         con_out("*** there were warnings treated as errors\n");
@@ -6475,17 +6487,13 @@ bool parser_finish(parser_t *parser, const char *output)
         if (OPTS_OPTION_BOOL(OPTION_DUMPFIN))
             ir_builder_dump(ir, con_out);
 
-        generate_checksum(parser);
-
         if (!ir_builder_generate(parser->code, ir, output)) {
             con_out("*** failed to generate output file\n");
             ir_builder_delete(ir);
             return false;
         }
     }
-
     diagnostic_destroy();
-
     ir_builder_delete(ir);
     return retval;
 }

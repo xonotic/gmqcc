@@ -22,7 +22,10 @@
  * SOFTWARE.
  */
 #include <time.h>
+#include <string.h>
+#include <stdlib.h>
 #include <sys/stat.h>
+
 #include "gmqcc.h"
 #include "lexer.h"
 
@@ -313,7 +316,7 @@ static void ppmacro_delete(ppmacro *self)
     mem_d(self);
 }
 
-static ftepp_t* ftepp_new()
+static ftepp_t* ftepp_new(void)
 {
     ftepp_t *ftepp;
 

@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdlib.h>
 
 #include "gmqcc.h"
 
@@ -834,7 +835,7 @@ static size_t qc_builtins_count = sizeof(qc_builtins) / sizeof(qc_builtins[0]);
 
 static const char *arg0 = NULL;
 
-static void version() {
+static void version(void) {
     printf("GMQCC-QCVM %d.%d.%d Built %s %s\n",
            GMQCC_VERSION_MAJOR,
            GMQCC_VERSION_MINOR,
@@ -844,7 +845,7 @@ static void version() {
     );
 }
 
-static void usage() {
+static void usage(void) {
     printf("usage: %s [options] [parameters] file\n", arg0);
     printf("options:\n");
     printf("  -h, --help         print this message\n"

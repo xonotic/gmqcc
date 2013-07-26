@@ -20,9 +20,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include "gmqcc.h"
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
+#include "gmqcc.h"
 
 opts_cmd_t opts;
 
@@ -1361,6 +1364,7 @@ int main(int argc, char **argv) {
     char         *defs     = NULL;
 
     con_init();
+    OPTS_OPTION_U16(OPTION_MEMDUMPCOLS) = 16;
 
     /*
      * Command line option parsing commences now We only need to support

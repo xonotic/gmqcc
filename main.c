@@ -21,9 +21,15 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+
 #include "gmqcc.h"
 #include "lexer.h"
-#include <time.h>
 
 /* TODO: cleanup this whole file .. it's a fuckign mess */
 
@@ -44,7 +50,7 @@ static ppitem  *ppems = NULL;
 
 static const char *app_name;
 
-static void version() {
+static void version(void) {
     con_out("GMQCC %d.%d.%d Built %s %s\n" GMQCC_DEV_VERSION_STRING,
         GMQCC_VERSION_MAJOR,
         GMQCC_VERSION_MINOR,
@@ -54,7 +60,7 @@ static void version() {
     );
 }
 
-static int usage() {
+static int usage(void) {
     con_out("usage: %s [options] [files...]", app_name);
     con_out("options:\n"
             "  -h, --help             show this help message\n"
@@ -170,6 +176,7 @@ static bool options_parse(int argc, char **argv) {
                     opts_set(opts.werror, WARN_INVALID_PARAMETER_COUNT, true);
                     opts_set(opts.werror, WARN_MISSING_RETURN_VALUES,   true);
                     opts_set(opts.flags,  EXPRESSIONS_FOR_BUILTINS,     true);
+                    opts_set(opts.warn,   WARN_BREAKDEF,                true);
 
 
                     OPTS_OPTION_U32(OPTION_STANDARD) = COMPILER_GMQCC;
@@ -191,6 +198,7 @@ static bool options_parse(int argc, char **argv) {
                     opts_set(opts.flags, ASSIGN_FUNCTION_TYPES,    true);
                     opts_set(opts.flags, CORRECT_TERNARY,          false);
                     opts_set(opts.warn, WARN_TERNARY_PRECEDENCE,   true);
+                    opts_set(opts.warn, WARN_BREAKDEF,             true);
 
                     OPTS_OPTION_U32(OPTION_STANDARD) = COMPILER_FTEQCC;
 
@@ -657,9 +665,10 @@ int main(int argc, char **argv) {
     }
 
     if (!vec_size(items)) {
-        FILE *src;
-        char *line;
+        FILE  *src;
+        char  *line    = NULL;
         size_t linelen = 0;
+        bool   hasline = false;
 
         progs_src = true;
 
@@ -670,28 +679,23 @@ int main(int argc, char **argv) {
             goto cleanup;
         }
 
-        line = NULL;
-        if (!progs_nextline(&line, &linelen, src) || !line[0]) {
-            con_err("illformatted progs.src file: expected output filename in first line\n");
-            retval = 1;
-            goto srcdone;
-        }
-
-        if (!opts_output_wasset) {
-            OPTS_OPTION_STR(OPTION_OUTPUT) = util_strdup(line);
-            opts_output_free = true;
-        }
-
         while (progs_nextline(&line, &linelen, src)) {
             argitem item;
+
             if (!line[0] || (line[0] == '/' && line[1] == '/'))
                 continue;
-            item.filename = util_strdup(line);
-            item.type     = TYPE_QC;
-            vec_push(items, item);
+                
+            if (hasline) {
+                item.filename = util_strdup(line);
+                item.type     = TYPE_QC;
+                vec_push(items, item);
+            } else if (!opts_output_wasset) {
+                OPTS_OPTION_STR(OPTION_OUTPUT) = util_strdup(line);
+                opts_output_free               = true;
+                hasline                        = true;
+            }
         }
 
-srcdone:
         fs_file_close(src);
         mem_d(line);
     }

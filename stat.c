@@ -1,3 +1,31 @@
+/*
+ * Copyright (C) 2012, 2013
+ *     Dale Weiler
+ *     Wolfgang Bumiller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+ 
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+
 #include "gmqcc.h"
 
 /*
@@ -37,13 +65,12 @@ static stat_size_table_t stat_size_vectors          = NULL;
 static stat_size_table_t stat_size_hashtables       = NULL;
 static stat_mem_block_t *stat_mem_block_root        = NULL;
 
-
 /*
  * A tiny size_t key-value hashtbale for tracking vector and hashtable
  * sizes. We can use it for other things too, if we need to. This is
  * very TIGHT, and efficent in terms of space though.
  */
-static stat_size_table_t stat_size_new() {
+static stat_size_table_t stat_size_new(void) {
     return (stat_size_table_t)memset(
         mem_a(sizeof(stat_size_entry_t*) * ST_SIZE),
         0, ST_SIZE * sizeof(stat_size_entry_t*)
@@ -323,14 +350,14 @@ hash_table_t *util_htnew(size_t size) {
     if ((find = stat_size_get(stat_size_hashtables, size)))
         find->value++;
     else {
-        stat_used_hashtables++;
+        stat_type_hashtables++;
         stat_size_put(stat_size_hashtables, size, 1);
     }
 
     hashtable->size = size;
     memset(hashtable->table, 0, sizeof(hash_node_t*) * size);
 
-    stat_type_hashtables++;
+    stat_used_hashtables++;
     return hashtable;
 }
 
@@ -496,7 +523,7 @@ static void stat_dump_mem_contents(stat_mem_block_t *memory, uint16_t cols) {
     }
 }
 
-static void stat_dump_mem_leaks() {
+static void stat_dump_mem_leaks(void) {
     stat_mem_block_t *info;
     for (info = stat_mem_block_root; info; info = info->next) {
         con_out("lost: %u (bytes) at %s:%u\n",
@@ -509,7 +536,7 @@ static void stat_dump_mem_leaks() {
     }
 }
 
-static void stat_dump_mem_info() {
+static void stat_dump_mem_info(void) {
     con_out("Memory information:\n\
     Total allocations:   %llu\n\
     Total deallocations: %llu\n\
@@ -530,7 +557,10 @@ static void stat_dump_mem_info() {
 static void stat_dump_stats_table(stat_size_table_t table, const char *string, uint64_t *size) {
     size_t i,j;
     
-    for (i = 0, j = 0; i < ST_SIZE; i++) {
+    if (!table)
+        return;
+    
+    for (i = 0, j = 1; i < ST_SIZE; i++) {
         stat_size_entry_t *entry;
 
         if (!(entry = table[i]))
@@ -554,7 +584,7 @@ void stat_info() {
 
     if (OPTS_OPTION_BOOL(OPTION_MEMCHK) ||
         OPTS_OPTION_BOOL(OPTION_STATISTICS)) {
-        uint64_t mem;
+        uint64_t mem = 0;
         
         con_out("\nAdditional Statistics:\n\
     Total vectors allocated:    %llu\n\
