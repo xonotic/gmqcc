@@ -104,13 +104,13 @@ static FILE ** task_popen(const char *command, const char *mode) {
         data->pipes  [0] = inhandle [1];
         data->pipes  [1] = outhandle[0];
         data->pipes  [2] = errhandle[0];
+
         data->handles[0] = fdopen(inhandle [1], "w");
         data->handles[1] = fdopen(outhandle[0], mode);
         data->handles[2] = fdopen(errhandle[0], mode);
 
         /* sigh */
-        if (argv)
-            vec_free(argv);
+        vec_free(argv);
         return data->handles;
     } else if (data->pid == 0) {
         /* child */
@@ -119,9 +119,9 @@ static FILE ** task_popen(const char *command, const char *mode) {
         close(errhandle[0]);
 
         /* see piping documentation for this sillyness :P */
-        close(0); (void)!dup(inhandle [0]);
-        close(1); (void)!dup(outhandle[1]);
-        close(2); (void)!dup(errhandle[1]);
+        dup2(inhandle [0], 0);
+        dup2(outhandle[1], 1);
+        dup2(errhandle[1], 2);
 
         execvp(*argv, argv);
         exit(EXIT_FAILURE);
@@ -135,8 +135,7 @@ task_popen_error_2: close(outhandle[0]), close(outhandle[1]);
 task_popen_error_1: close(inhandle [0]), close(inhandle [1]);
 task_popen_error_0:
 
-    if (argv)
-        vec_free(argv);
+    vec_free(argv);
     return NULL;
 }
 
@@ -325,6 +324,8 @@ static bool task_template_generate(task_template_t *tmpl, char tag, const char *
      */
     if (value && *value && (*value == ' ' || *value == '\t'))
         value++;
+    else if (!value)
+        exit(EXIT_FAILURE);
 
     /*
      * Value will contain a newline character at the end, we need to strip
@@ -332,8 +333,6 @@ static bool task_template_generate(task_template_t *tmpl, char tag, const char *
      */
     if (strchr(value, '\n'))
         *strrchr(value, '\n')='\0';
-    else /* cppcheck: possible nullpointer dereference */
-        exit(EXIT_FAILURE);
 
     /*
      * Now allocate and set the actual value for the specific tag. Which
@@ -474,8 +473,7 @@ static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *f
     return true;
 
 failure:
-    if (back)
-        mem_d (back);
+    mem_d (back);
     return false;
 }
 
@@ -640,6 +638,7 @@ static void task_template_destroy(task_template_t **tmpl) {
      * Nullify all the template members otherwise NULL comparision
      * checks will fail if tmpl pointer is reused.
      */
+    mem_d((*tmpl)->tempfilename);
     mem_d(*tmpl);
 }
 
@@ -695,6 +694,7 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
             char            *qcflags = NULL;
             task_t           task;
 
+            task.compiled = false;
             util_debug("TEST", "compiling task template: %s/%s\n", curdir, files->d_name);
             found ++;
             if (!tmpl) {
@@ -707,7 +707,7 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
              * so we don't trample over an existing one.
              */
             tmpl->tempfilename = NULL;
-            util_asprintf(&tmpl->tempfilename, "%s/TMPDAT.%s", curdir, files->d_name);
+            util_asprintf(&tmpl->tempfilename, "%s/TMPDAT.%s.dat", curdir, files->d_name);
 
             /*
              * Additional QCFLAGS enviroment variable may be used
@@ -897,7 +897,7 @@ static void task_destroy(void) {
             else
                 util_debug("TEST", "removed stderr log file: %s\n", task_tasks[i].stderrlogfile);
 
-            remove(task_tasks[i].tmpl->tempfilename);
+            (void)!remove(task_tasks[i].tmpl->tempfilename);
         }
 
         /* free util_strdup data for log files */

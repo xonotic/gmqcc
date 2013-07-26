@@ -42,6 +42,8 @@
 static bool ast_member_codegen(ast_member*, ast_function*, bool lvalue, ir_value**);
 static void ast_array_index_delete(ast_array_index*);
 static bool ast_array_index_codegen(ast_array_index*, ast_function*, bool lvalue, ir_value**);
+static void ast_argpipe_delete(ast_argpipe*);
+static bool ast_argpipe_codegen(ast_argpipe*, ast_function*, bool lvalue, ir_value**);
 static void ast_store_delete(ast_store*);
 static bool ast_store_codegen(ast_store*, ast_function*, bool lvalue, ir_value**);
 static void ast_ifthen_delete(ast_ifthen*);
@@ -694,6 +696,23 @@ void ast_array_index_delete(ast_array_index *self)
     mem_d(self);
 }
 
+ast_argpipe* ast_argpipe_new(lex_ctx ctx, ast_expression *index)
+{
+    ast_instantiate(ast_argpipe, ctx, ast_argpipe_delete);
+    ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_argpipe_codegen);
+    self->index = index;
+    self->expression.vtype = TYPE_NOEXPR;
+    return self;
+}
+
+void ast_argpipe_delete(ast_argpipe *self)
+{
+    if (self->index)
+        ast_unref(self->index);
+    ast_expression_delete((ast_expression*)self);
+    mem_d(self);
+}
+
 ast_ifthen* ast_ifthen_new(lex_ctx ctx, ast_expression *cond, ast_expression *ontrue, ast_expression *onfalse)
 {
     ast_instantiate(ast_ifthen, ctx, ast_ifthen_delete);
@@ -950,7 +969,50 @@ void ast_call_delete(ast_call *self)
     mem_d(self);
 }
 
-bool ast_call_check_types(ast_call *self)
+static bool ast_call_check_vararg(ast_call *self, ast_expression *va_type, ast_expression *exp_type)
+{
+    char texp[1024];
+    char tgot[1024];
+    if (!exp_type)
+        return true;
+    if (!va_type || !ast_compare_type(va_type, exp_type))
+    {
+        if (va_type && exp_type)
+        {
+            ast_type_to_string(va_type,  tgot, sizeof(tgot));
+            ast_type_to_string(exp_type, texp, sizeof(texp));
+            if (OPTS_FLAG(UNSAFE_VARARGS)) {
+                if (compile_warning(ast_ctx(self), WARN_UNSAFE_TYPES,
+                                    "piped variadic argument differs in type: constrained to type %s, expected type %s",
+                                    tgot, texp))
+                    return false;
+            } else {
+                compile_error(ast_ctx(self),
+                              "piped variadic argument differs in type: constrained to type %s, expected type %s",
+                              tgot, texp);
+                return false;
+            }
+        }
+        else
+        {
+            ast_type_to_string(exp_type, texp, sizeof(texp));
+            if (OPTS_FLAG(UNSAFE_VARARGS)) {
+                if (compile_warning(ast_ctx(self), WARN_UNSAFE_TYPES,
+                                    "piped variadic argument may differ in type: expected type %s",
+                                    texp))
+                    return false;
+            } else {
+                compile_error(ast_ctx(self),
+                              "piped variadic argument may differ in type: expected type %s",
+                              texp);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool ast_call_check_types(ast_call *self, ast_expression *va_type)
 {
     char texp[1024];
     char tgot[1024];
@@ -962,7 +1024,16 @@ bool ast_call_check_types(ast_call *self)
         count = vec_size(func->params);
 
     for (i = 0; i < count; ++i) {
-        if (!ast_compare_type(self->params[i], (ast_expression*)(func->params[i])))
+        if (ast_istype(self->params[i], ast_argpipe)) {
+            /* warn about type safety instead */
+            if (i+1 != count) {
+                compile_error(ast_ctx(self), "argpipe must be the last parameter to a function call");
+                return false;
+            }
+            if (!ast_call_check_vararg(self, va_type, (ast_expression*)func->params[i]))
+                retval = false;
+        }
+        else if (!ast_compare_type(self->params[i], (ast_expression*)(func->params[i])))
         {
             ast_type_to_string(self->params[i], tgot, sizeof(tgot));
             ast_type_to_string((ast_expression*)func->params[i], texp, sizeof(texp));
@@ -975,11 +1046,20 @@ bool ast_call_check_types(ast_call *self)
     count = vec_size(self->params);
     if (count > vec_size(func->params) && func->varparam) {
         for (; i < count; ++i) {
-            if (!ast_compare_type(self->params[i], func->varparam))
+            if (ast_istype(self->params[i], ast_argpipe)) {
+                /* warn about type safety instead */
+                if (i+1 != count) {
+                    compile_error(ast_ctx(self), "argpipe must be the last parameter to a function call");
+                    return false;
+                }
+                if (!ast_call_check_vararg(self, va_type, func->varparam))
+                    retval = false;
+            }
+            else if (!ast_compare_type(self->params[i], func->varparam))
             {
                 ast_type_to_string(self->params[i], tgot, sizeof(tgot));
                 ast_type_to_string(func->varparam, texp, sizeof(texp));
-                compile_error(ast_ctx(self), "invalid type for parameter %u in function call: expected %s, got %s",
+                compile_error(ast_ctx(self), "invalid type for variadic parameter %u in function call: expected %s, got %s",
                          (unsigned int)(i+1), texp, tgot);
                 /* we don't immediately return */
                 retval = false;
@@ -1072,16 +1152,15 @@ ast_function* ast_function_new(lex_ctx ctx, const char *name, ast_value *vtype)
 {
     ast_instantiate(ast_function, ctx, ast_function_delete);
 
-    if (!vtype ||
-        vtype->hasvalue ||
-        vtype->expression.vtype != TYPE_FUNCTION)
-    {
+    if (!vtype) {
+        compile_error(ast_ctx(self), "internal error: ast_function_new condition 0");
+        goto cleanup;
+    } else if (vtype->hasvalue || vtype->expression.vtype != TYPE_FUNCTION) {
         compile_error(ast_ctx(self), "internal error: ast_function_new condition %i %i type=%i (probably 2 bodies?)",
                  (int)!vtype,
                  (int)vtype->hasvalue,
                  vtype->expression.vtype);
-        mem_d(self);
-        return NULL;
+        goto cleanup;
     }
 
     self->vtype  = vtype;
@@ -1106,6 +1185,10 @@ ast_function* ast_function_new(lex_ctx ctx, const char *name, ast_value *vtype)
     self->return_value     = NULL;
 
     return self;
+    
+cleanup:
+    mem_d(self);
+    return NULL;
 }
 
 void ast_function_delete(ast_function *self)
@@ -1204,6 +1287,63 @@ bool ast_value_codegen(ast_value *self, ast_function *func, bool lvalue, ir_valu
         return false;
     }
     *out = self->ir_v;
+    return true;
+}
+
+static bool ast_global_array_set(ast_value *self)
+{
+    size_t count = vec_size(self->initlist);
+    size_t i;
+
+    if (count > self->expression.count) {
+        compile_error(ast_ctx(self), "too many elements in initializer");
+        count = self->expression.count;
+    }
+    else if (count < self->expression.count) {
+        /* add this?
+        compile_warning(ast_ctx(self), "not all elements are initialized");
+        */
+    }
+
+    for (i = 0; i != count; ++i) {
+        switch (self->expression.next->vtype) {
+            case TYPE_FLOAT:
+                if (!ir_value_set_float(self->ir_values[i], self->initlist[i].vfloat))
+                    return false;
+                break;
+            case TYPE_VECTOR:
+                if (!ir_value_set_vector(self->ir_values[i], self->initlist[i].vvec))
+                    return false;
+                break;
+            case TYPE_STRING:
+                if (!ir_value_set_string(self->ir_values[i], self->initlist[i].vstring))
+                    return false;
+                break;
+            case TYPE_ARRAY:
+                /* we don't support them in any other place yet either */
+                compile_error(ast_ctx(self), "TODO: nested arrays");
+                return false;
+            case TYPE_FUNCTION:
+                /* this requiers a bit more work - similar to the fields I suppose */
+                compile_error(ast_ctx(self), "global of type function not properly generated");
+                return false;
+            case TYPE_FIELD:
+                if (!self->initlist[i].vfield) {
+                    compile_error(ast_ctx(self), "field constant without vfield set");
+                    return false;
+                }
+                if (!self->initlist[i].vfield->ir_v) {
+                    compile_error(ast_ctx(self), "field constant generated before its field");
+                    return false;
+                }
+                if (!ir_value_set_field(self->ir_values[i], self->initlist[i].vfield->ir_v))
+                    return false;
+                break;
+            default:
+                compile_error(ast_ctx(self), "TODO: global constant type %i", self->expression.vtype);
+                break;
+        }
+    }
     return true;
 }
 
@@ -1316,6 +1456,11 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
         ast_expression *elemtype = self->expression.next;
         int vtype = elemtype->vtype;
 
+        if (self->expression.flags & AST_FLAG_ARRAY_INIT && !self->expression.count) {
+            compile_error(ast_ctx(self), "array `%s' has no size", self->name);
+            return false;
+        }
+
         /* same as with field arrays */
         if (!self->expression.count || self->expression.count > OPTS_OPTION_U32(OPTION_MAX_ARRAY_SIZE))
             compile_error(ast_ctx(self), "Invalid array of size %lu", (unsigned long)self->expression.count);
@@ -1367,6 +1512,13 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
         v->context = ast_ctx(self);
     }
 
+    /* link us to the ir_value */
+    v->cvq = self->cvq;
+    self->ir_v = v;
+    if (self->expression.flags & AST_FLAG_INCLUDE_DEF)
+        self->ir_v->flags |= IR_FLAG_INCLUDE_DEF;
+
+    /* initialize */
     if (self->hasvalue) {
         switch (self->expression.vtype)
         {
@@ -1383,7 +1535,7 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
                     goto error;
                 break;
             case TYPE_ARRAY:
-                compile_error(ast_ctx(self), "TODO: global constant array");
+                ast_global_array_set(self);
                 break;
             case TYPE_FUNCTION:
                 compile_error(ast_ctx(self), "global of type function not properly generated");
@@ -1408,16 +1560,10 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
                 break;
         }
     }
-
-    /* link us to the ir_value */
-    v->cvq = self->cvq;
-    self->ir_v = v;
-    if (self->expression.flags & AST_FLAG_INCLUDE_DEF)
-        self->ir_v->flags |= IR_FLAG_INCLUDE_DEF;
     return true;
 
 error: /* clean up */
-    ir_value_delete(v);
+    if(v) ir_value_delete(v);
     return false;
 }
 
@@ -2341,6 +2487,19 @@ bool ast_array_index_codegen(ast_array_index *self, ast_function *func, bool lva
     return true;
 }
 
+bool ast_argpipe_codegen(ast_argpipe *self, ast_function *func, bool lvalue, ir_value **out)
+{
+    *out = NULL;
+    if (lvalue) {
+        compile_error(ast_ctx(self), "argpipe node: not an lvalue");
+        return false;
+    }
+    (void)func;
+    (void)out;
+    compile_error(ast_ctx(self), "TODO: argpipe codegen not implemented");
+    return false;
+}
+
 bool ast_ifthen_codegen(ast_ifthen *self, ast_function *func, bool lvalue, ir_value **out)
 {
     ast_expression_codegen *cgen;
@@ -2724,9 +2883,13 @@ bool ast_loop_codegen(ast_loop *self, ast_function *func, bool lvalue, ir_value 
     /* Now all blocks are in place */
     /* From 'bin' we jump to whatever comes first */
     if      (bprecond)   tmpblock = bprecond;
-    else if (bbody)      tmpblock = bbody;
+    else                 tmpblock = bbody;    /* can never be null */
+    
+    /* DEAD CODE
     else if (bpostcond)  tmpblock = bpostcond;
     else                 tmpblock = bout;
+    */
+    
     if (!ir_block_create_jump(bin, ast_ctx(self), tmpblock))
         return false;
 
@@ -2734,10 +2897,13 @@ bool ast_loop_codegen(ast_loop *self, ast_function *func, bool lvalue, ir_value 
     if (bprecond)
     {
         ir_block *ontrue, *onfalse;
-        if      (bbody)      ontrue = bbody;
+        ontrue = bbody; /* can never be null */
+
+        /* all of this is dead code 
         else if (bincrement) ontrue = bincrement;
-        else if (bpostcond)  ontrue = bpostcond;
-        else                 ontrue = bprecond;
+        else                 ontrue = bpostcond;
+        */
+
         onfalse = bout;
         if (self->pre_not) {
             tmpblock = ontrue;
@@ -2775,9 +2941,13 @@ bool ast_loop_codegen(ast_loop *self, ast_function *func, bool lvalue, ir_value 
     {
         ir_block *ontrue, *onfalse;
         if      (bprecond)   ontrue = bprecond;
-        else if (bbody)      ontrue = bbody;
+        else                 ontrue = bbody; /* can never be null */
+
+        /* all of this is dead code 
         else if (bincrement) ontrue = bincrement;
         else                 ontrue = bpostcond;
+        */
+
         onfalse = bout;
         if (self->post_not) {
             tmpblock = ontrue;

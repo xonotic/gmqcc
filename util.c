@@ -22,7 +22,6 @@
  * SOFTWARE.
  */
 #include <string.h>
-#include <ctype.h>
 #include <stdlib.h>
 
 #include "gmqcc.h"
@@ -201,7 +200,7 @@ uint16_t util_crc16(const char *k, int len, const short clamp) {
 size_t util_strtocmd(const char *in, char *out, size_t outsz) {
     size_t sz = 1;
     for (; *in && sz < outsz; ++in, ++out, ++sz)
-        *out = (*in == '-') ? '_' : (isalpha(*in) && !isupper(*in)) ? *in + 'A' - 'a': *in;
+        *out = (*in == '-') ? '_' : (util_isalpha(*in) && !util_isupper(*in)) ? *in + 'A' - 'a': *in;
     *out = 0;
     return sz-1;
 }
@@ -209,7 +208,7 @@ size_t util_strtocmd(const char *in, char *out, size_t outsz) {
 size_t util_strtononcmd(const char *in, char *out, size_t outsz) {
     size_t sz = 1;
     for (; *in && sz < outsz; ++in, ++out, ++sz)
-        *out = (*in == '_') ? '-' : (isalpha(*in) && isupper(*in)) ? *in + 'a' - 'A' : *in;
+        *out = (*in == '_') ? '-' : (util_isalpha(*in) && util_isupper(*in)) ? *in + 'a' - 'A' : *in;
     *out = 0;
     return sz-1;
 }
@@ -321,7 +320,7 @@ int util_asprintf(char **ret, const char *fmt, ...) {
 
         allocated = (char*)mem_a(4096); /* A page must be enough */
         strerror_s(allocated, 4096, num);
-    
+
         vec_push(vector, allocated);
         return (const char *)allocated;
     }
@@ -426,7 +425,7 @@ static GMQCC_INLINE void mt_generate(void) {
      * Said loop has been unrolled for MT_SPACE (226 iterations), opposed
      * to [0, MT_SIZE)  (634 iterations).
      */
-    for (i = 0; i < MT_SPACE; ++i) {
+    for (i = 0; i < MT_SPACE-1; ++i) {
         y           = (0x80000000 & mt_state[i]) | (0x7FFFFFF & mt_state[i + 1]);
         mt_state[i] = mt_state[i + MT_PERIOD] ^ (y >> 1) ^ matrix[y & 1];
 
@@ -441,7 +440,7 @@ static GMQCC_INLINE void mt_generate(void) {
      * = 2*2*3*3*11])
      */
     i = MT_SPACE;
-    while (i < MT_SIZE - 1) {
+    while (i < MT_SIZE-2) {
         /*
          * We expand this 11 times .. manually, no macros are required
          * here. This all fits in the CPU cache.

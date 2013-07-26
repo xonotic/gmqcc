@@ -334,6 +334,7 @@ static bool pak_extract_all(pak_file_t *pak, const char *dir) {
 static bool pak_insert_one(pak_file_t *pak, const char *file) {
     pak_directory_t dir;
     unsigned char  *dat;
+    long            len;
     FILE           *fp;
 
     /*
@@ -353,9 +354,13 @@ static bool pak_insert_one(pak_file_t *pak, const char *file) {
      * to the PAK file itself.
      */
     fs_file_seek(fp, 0, SEEK_END);
-    dir.len = fs_file_tell(fp);
+    if ((len = fs_file_tell(fp)) < 0) {
+        fs_file_close(fp);
+        return false;
+    }
     fs_file_seek(fp, 0, SEEK_SET);
 
+    dir.len = len;
     dir.pos = fs_file_tell(pak->handle);
 
     /*
@@ -427,8 +432,16 @@ static bool pak_close(pak_file_t *pak) {
      * our directory entries at the end of the file.
      */
     if (pak->insert) {
+        int tell = fs_file_tell(pak->handle);
+        if (tell < 0) {
+            vec_free     (pak->directories);
+            fs_file_close(pak->handle);
+            mem_d        (pak);
+
+            return false;
+        }
         pak->header.dirlen = vec_size(pak->directories) * 64;
-        pak->header.diroff = ftell(pak->handle);
+        pak->header.diroff = tell;
 
         /* patch header */
         fs_file_seek (pak->handle, 0, SEEK_SET);
@@ -556,7 +569,7 @@ int main(int argc, char **argv) {
         pak_close(pak);
         vec_free(files);
         stat_info();
-        
+
         return EXIT_SUCCESS;
     }
 
