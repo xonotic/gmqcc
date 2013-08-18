@@ -14,10 +14,10 @@ LDFLAGS +=
 LIBS    += -lm -lpthread
 
 #objects
-OBJ_C = main.o lexer.o parser.o thread.o fs.o stat.o util.o code.o ast.o ir.o conout.o ftepp.o opts.o utf8.o correct.o
+OBJ_C = main.o lexer.o parser.o thread.o fs.o stat.o util.o code.o ast.o ir.o conout.o ftepp.o opts.o utf8.o correct.o fold.o intrin.o
 OBJ_P = util.o fs.o conout.o opts.o pak.o stat.o
-OBJ_T = test.o util.o conout.o fs.o stat.o
-OBJ_X = exec-standalone.o util.o conout.o fs.o stat.o
+OBJ_T = test.o util.o opts.o conout.o fs.o stat.o
+OBJ_X = exec-standalone.o util.o opts.o conout.o fs.o stat.o
 
 #gource flags
 GOURCEFLAGS =                 \
@@ -107,3 +107,7 @@ uninstall:
 	rm -f $(DESTDIR)$(MANDIR)/man1/doc/gmqcc.1
 	rm -f $(DESTDIR)$(MANDIR)/man1/doc/qcvm.1
 	rm -f $(DESTDIR)$(MANDIR)/man1/doc/gmqpak.1
+
+whitespace:
+	find . -type f \( -name '*.[ch]' -or -name '*.def' \) -exec sed -i 's/ *$$//' '{}' ';'
+

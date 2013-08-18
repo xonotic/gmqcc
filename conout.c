@@ -105,11 +105,10 @@ static const int ansi2win[] = {
 
 static int win_fputs(FILE *h, const char *str) {
     /* state for translate */
-    int acolor;
-    int wcolor;
-    int icolor;
-
-    int state = 0;
+    int acolor = 0;
+    int wcolor = 0;
+    int icolor = 0;
+    int state  = 0;
 
     /* attributes */
     int intense  =  -1;
@@ -327,6 +326,7 @@ int con_out(const char *fmt, ...) {
     return   ln;
 }
 
+#ifndef QCVM_EXECUTOR
 /*
  * Utility console message writes for lexer contexts.  These will allow
  * for reporting of file:line based on lexer context, These are used
@@ -368,11 +368,11 @@ void con_printmsg(int level, const char *name, size_t line, size_t column, const
     va_end  (va);
 }
 
-void con_cvprintmsg(void *ctx, int lvl, const char *msgtype, const char *msg, va_list ap) {
-    con_vprintmsg(lvl, ((lex_ctx*)ctx)->file, ((lex_ctx*)ctx)->line, ((lex_ctx*)ctx)->column, msgtype, msg, ap);
+void con_cvprintmsg(lex_ctx_t ctx, int lvl, const char *msgtype, const char *msg, va_list ap) {
+    con_vprintmsg(lvl, ctx.file, ctx.line, ctx.column, msgtype, msg, ap);
 }
 
-void con_cprintmsg (void *ctx, int lvl, const char *msgtype, const char *msg, ...) {
+void con_cprintmsg(lex_ctx_t ctx, int lvl, const char *msgtype, const char *msg, ...) {
     va_list   va;
     va_start(va, msg);
     con_cvprintmsg(ctx, lvl, msgtype, msg, va);
@@ -380,24 +380,23 @@ void con_cprintmsg (void *ctx, int lvl, const char *msgtype, const char *msg, ..
 }
 
 /* General error interface */
-size_t compile_errors = 0;
+size_t compile_errors   = 0;
 size_t compile_warnings = 0;
-
-size_t compile_Werrors = 0;
-static lex_ctx first_werror;
+size_t compile_Werrors  = 0;
+static lex_ctx_t first_werror;
 
 void compile_show_werrors()
 {
-    con_cprintmsg((void*)&first_werror, LVL_ERROR, "first warning", "was here");
+    con_cprintmsg(first_werror, LVL_ERROR, "first warning", "was here");
 }
 
-void vcompile_error(lex_ctx ctx, const char *msg, va_list ap)
+void vcompile_error(lex_ctx_t ctx, const char *msg, va_list ap)
 {
     ++compile_errors;
-    con_cvprintmsg((void*)&ctx, LVL_ERROR, "error", msg, ap);
+    con_cvprintmsg(ctx, LVL_ERROR, "error", msg, ap);
 }
 
-void compile_error(lex_ctx ctx, const char *msg, ...)
+void compile_error(lex_ctx_t ctx, const char *msg, ...)
 {
     va_list ap;
     va_start(ap, msg);
@@ -405,7 +404,7 @@ void compile_error(lex_ctx ctx, const char *msg, ...)
     va_end(ap);
 }
 
-bool GMQCC_WARN vcompile_warning(lex_ctx ctx, int warntype, const char *fmt, va_list ap)
+bool GMQCC_WARN vcompile_warning(lex_ctx_t ctx, int warntype, const char *fmt, va_list ap)
 {
     const char *msgtype = "warning";
     int         lvl     = LVL_WARNING;
@@ -436,7 +435,7 @@ bool GMQCC_WARN vcompile_warning(lex_ctx ctx, int warntype, const char *fmt, va_
     return OPTS_WERROR(warntype) && OPTS_FLAG(BAIL_ON_WERROR);
 }
 
-bool GMQCC_WARN compile_warning(lex_ctx ctx, int warntype, const char *fmt, ...)
+bool GMQCC_WARN compile_warning(lex_ctx_t ctx, int warntype, const char *fmt, ...)
 {
     bool r;
     va_list ap;
@@ -445,3 +444,4 @@ bool GMQCC_WARN compile_warning(lex_ctx ctx, int warntype, const char *fmt, ...)
     va_end(ap);
     return r;
 }
+#endif

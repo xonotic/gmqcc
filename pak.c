@@ -266,15 +266,14 @@ static bool pak_extract_one(pak_file_t *pak, const char *file, const char *outdi
     pak_directory_t *dir   = NULL;
     unsigned char   *dat   = NULL;
     char            *local = NULL;
-    FILE            *out;
+    FILE            *out   = NULL;
 
     if (!pak_exists(pak, file, &dir)) {
         return false;
     }
 
-    if (!(dat = (unsigned char *)mem_a(dir->len))) {
-        return false;
-    }
+    if (!(dat = (unsigned char *)mem_a(dir->len)))
+        goto err;
 
     /*
      * Generate the directory structure / tree that will be required
@@ -289,28 +288,27 @@ static bool pak_extract_one(pak_file_t *pak, const char *file, const char *outdi
      * Now create the file, if this operation fails.  Then abort
      * It shouldn't fail though.
      */
-    if (!(out = fs_file_open(local, "wb"))) {
-        mem_d(dat);
-        return false;
-    }
+    if (!(out = fs_file_open(local, "wb")))
+        goto err;
 
     /* free memory for directory string */
     mem_d(local);
 
     /* read */
-    fs_file_seek (pak->handle, dir->pos, SEEK_SET);
+    if (fs_file_seek (pak->handle, dir->pos, SEEK_SET) != 0)
+        goto err;
+
     fs_file_read (dat, 1, dir->len, pak->handle);
-
-    /* write */
     fs_file_write(dat, 1, dir->len, out);
-
-    /* close */
     fs_file_close(out);
 
-    /* free */
     mem_d(dat);
-
     return true;
+
+err:
+    if (dat) mem_d(dat);
+    if (out) fs_file_close(out);
+    return false;
 }
 
 static bool pak_extract_all(pak_file_t *pak, const char *dir) {
@@ -353,12 +351,10 @@ static bool pak_insert_one(pak_file_t *pak, const char *file) {
      * the directory entry, and the actual contents of the file
      * to the PAK file itself.
      */
-    fs_file_seek(fp, 0, SEEK_END);
-    if ((len = fs_file_tell(fp)) < 0) {
-        fs_file_close(fp);
-        return false;
-    }
-    fs_file_seek(fp, 0, SEEK_SET);
+    if (fs_file_seek(fp, 0, SEEK_END) != 0 || ((len = fs_file_tell(fp)) < 0))
+        goto err;
+    if (fs_file_seek(fp, 0, SEEK_SET) != 0)
+        goto err;
 
     dir.len = len;
     dir.pos = fs_file_tell(pak->handle);
@@ -367,10 +363,8 @@ static bool pak_insert_one(pak_file_t *pak, const char *file) {
      * We're limited to 56 bytes for a file name string, that INCLUDES
      * the directory and '/' seperators.
      */
-    if (strlen(file) >= 56) {
-        fs_file_close(fp);
-        return false;
-    }
+    if (strlen(file) >= 56)
+        goto err;
 
     util_strncpy(dir.name, file, strlen(file));
 
@@ -378,10 +372,8 @@ static bool pak_insert_one(pak_file_t *pak, const char *file) {
      * Allocate some memory for loading in the data that will be
      * redirected into the PAK file.
      */
-    if (!(dat = (unsigned char *)mem_a(dir.len))) {
-        fs_file_close(fp);
-        return false;
-    }
+    if (!(dat = (unsigned char *)mem_a(dir.len)))
+        goto err;
 
     fs_file_read (dat, dir.len, 1, fp);
     fs_file_close(fp);
@@ -394,13 +386,18 @@ static bool pak_insert_one(pak_file_t *pak, const char *file) {
     vec_push(pak->directories, dir);
 
     return true;
+
+err:
+    fs_file_close(fp);
+    return false;
 }
 
 /*
  * Like pak_insert_one, except this collects files in all directories
  * from a root directory, and inserts them all.
  */
-bool pak_insert_all(pak_file_t *pak, const char *dir) {
+#if 0
+static bool pak_insert_all(pak_file_t *pak, const char *dir) {
     DIR           *dp;
     struct dirent *dirp;
 
@@ -420,9 +417,11 @@ bool pak_insert_all(pak_file_t *pak, const char *dir) {
     fs_dir_close(dp);
     return true;
 }
+#endif /*!if 0 renable when ready to use */
 
 static bool pak_close(pak_file_t *pak) {
     size_t itr;
+    long   tell;
 
     if (!pak)
         return false;
@@ -432,23 +431,21 @@ static bool pak_close(pak_file_t *pak) {
      * our directory entries at the end of the file.
      */
     if (pak->insert) {
-        int tell = fs_file_tell(pak->handle);
-        if (tell < 0) {
-            vec_free     (pak->directories);
-            fs_file_close(pak->handle);
-            mem_d        (pak);
+        if ((tell = fs_file_tell(pak->handle)) != 0)
+            goto err;
 
-            return false;
-        }
         pak->header.dirlen = vec_size(pak->directories) * 64;
         pak->header.diroff = tell;
 
         /* patch header */
-        fs_file_seek (pak->handle, 0, SEEK_SET);
+        if (fs_file_seek (pak->handle, 0, SEEK_SET) != 0)
+            goto err;
+
         fs_file_write(&(pak->header), sizeof(pak_header_t), 1, pak->handle);
 
         /* write directories */
-        fs_file_seek (pak->handle, pak->header.diroff, SEEK_SET);
+        if (fs_file_seek (pak->handle, pak->header.diroff, SEEK_SET) != 0)
+            goto err;
 
         for (itr = 0; itr < vec_size(pak->directories); itr++) {
             fs_file_write(&(pak->directories[itr]), sizeof(pak_directory_t), 1, pak->handle);
@@ -460,6 +457,13 @@ static bool pak_close(pak_file_t *pak) {
     mem_d        (pak);
 
     return true;
+
+err:
+    vec_free     (pak->directories);
+    fs_file_close(pak->handle);
+    mem_d        (pak);
+
+    return false;
 }
 
 /*

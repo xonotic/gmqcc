@@ -28,6 +28,22 @@
 #include "gmqcc.h"
 
 /*
+ * For the valgrind integration of our allocator. This allows us to have
+ * more `accurate` valgrind output for our allocator, and also secures the
+ * possible underflows (where one could obtain access to the redzone that
+ * represents info about that allocation).
+ */
+#ifndef NVALGRIND
+#   include <valgrind/valgrind.h>
+#   include <valgrind/memcheck.h>
+#else
+#   define VALGRIND_MALLOCLIKE_BLOCK(PTR, ALLOC_SIZE, REDZONE_SIZE, ZEROED)
+#   define VALGRIND_FREELIKE_BLOCK(PTR, REDZONE_SIZE)
+#   define VALGRIND_MAKE_MEM_DEFINED(PTR, REDZONE_SIZE)
+#   define VALGRIND_MAKE_MEM_NOACCESS(PTR, REDZONE_SIZE)
+#endif
+
+/*
  * GMQCC performs tons of allocations, constructions, and crazyness
  * all around. When trying to optimizes systems, or just get fancy
  * statistics out of the compiler, it's often printf mess. This file
@@ -55,6 +71,7 @@ static uint64_t          stat_mem_allocated_total   = 0;
 static uint64_t          stat_mem_deallocated_total = 0;
 static uint64_t          stat_mem_high              = 0;
 static uint64_t          stat_mem_peak              = 0;
+static uint64_t          stat_mem_strdups           = 0;
 static uint64_t          stat_used_strdups          = 0;
 static uint64_t          stat_used_vectors          = 0;
 static uint64_t          stat_used_hashtables       = 0;
@@ -106,7 +123,7 @@ void *stat_mem_allocate(size_t size, size_t line, const char *file) {
     stat_mem_block_t *info = (stat_mem_block_t*)malloc(sizeof(stat_mem_block_t) + size);
     void             *data = (void*)(info + 1);
 
-    if(!info)
+    if(GMQCC_UNLIKELY(!info))
         return NULL;
 
     info->line = line;
@@ -115,8 +132,12 @@ void *stat_mem_allocate(size_t size, size_t line, const char *file) {
     info->prev = NULL;
     info->next = stat_mem_block_root;
 
-    if (stat_mem_block_root)
+    /* likely since it only happens once */
+    if (GMQCC_LIKELY(stat_mem_block_root != NULL)) {
+        VALGRIND_MAKE_MEM_DEFINED(stat_mem_block_root, sizeof(stat_mem_block_t));
         stat_mem_block_root->prev = info;
+        VALGRIND_MAKE_MEM_NOACCESS(stat_mem_block_root, sizeof(stat_mem_block_t));
+    }
 
     stat_mem_block_root       = info;
     stat_mem_allocated       += size;
@@ -126,40 +147,61 @@ void *stat_mem_allocate(size_t size, size_t line, const char *file) {
     if (stat_mem_high > stat_mem_peak)
         stat_mem_peak = stat_mem_high;
 
+    VALGRIND_MALLOCLIKE_BLOCK(data, size, sizeof(stat_mem_block_t), 0);
     return data;
 }
 
 void stat_mem_deallocate(void *ptr) {
     stat_mem_block_t *info = NULL;
 
-    if (!ptr)
+    if (GMQCC_UNLIKELY(!ptr))
         return;
 
     info = ((stat_mem_block_t*)ptr - 1);
+
+    /*
+     * we need access to the redzone that represents the info block
+     * so lets do that.
+     */
+    VALGRIND_MAKE_MEM_DEFINED(info, sizeof(stat_mem_block_t));
 
     stat_mem_deallocated       += info->size;
     stat_mem_high              -= info->size;
     stat_mem_deallocated_total ++;
 
-    if (info->prev) info->prev->next = info->next;
-    if (info->next) info->next->prev = info->prev;
+    if (info->prev) {
+        /* just need access for a short period */
+        VALGRIND_MAKE_MEM_DEFINED(info->prev, sizeof(stat_mem_block_t));
+        info->prev->next = info->next;
+        /* don't need access anymore */
+        VALGRIND_MAKE_MEM_NOACCESS(info->prev, sizeof(stat_mem_block_t));
+    }
+    if (info->next) {
+        /* just need access for a short period */
+        VALGRIND_MAKE_MEM_DEFINED(info->next, sizeof(stat_mem_block_t));
+        info->next->prev = info->prev;
+        /* don't need access anymore */
+        VALGRIND_MAKE_MEM_NOACCESS(info->next, sizeof(stat_mem_block_t));
+    }
 
     /* move ahead */
     if (info == stat_mem_block_root)
         stat_mem_block_root = info->next;
 
     free(info);
+    VALGRIND_MAKE_MEM_NOACCESS(info, sizeof(stat_mem_block_t));
+    VALGRIND_FREELIKE_BLOCK(ptr, sizeof(stat_mem_block_t));
 }
 
 void *stat_mem_reallocate(void *ptr, size_t size, size_t line, const char *file) {
     stat_mem_block_t *oldinfo = NULL;
     stat_mem_block_t *newinfo;
 
-    if (!ptr)
+    if (GMQCC_UNLIKELY(!ptr))
         return stat_mem_allocate(size, line, file);
 
-    /* stay consistent with glic */
-    if (!size) {
+    /* stay consistent with glibc */
+    if (GMQCC_UNLIKELY(!size)) {
         stat_mem_deallocate(ptr);
         return NULL;
     }
@@ -167,19 +209,40 @@ void *stat_mem_reallocate(void *ptr, size_t size, size_t line, const char *file)
     oldinfo = ((stat_mem_block_t*)ptr - 1);
     newinfo = ((stat_mem_block_t*)malloc(sizeof(stat_mem_block_t) + size));
 
-    if (!newinfo) {
+    if (GMQCC_UNLIKELY(!newinfo)) {
         stat_mem_deallocate(ptr);
         return NULL;
     }
 
+    VALGRIND_MALLOCLIKE_BLOCK(newinfo + 1, size, sizeof(stat_mem_block_t), 0);
+
+    /* we need access to the old info redzone */
+    VALGRIND_MAKE_MEM_DEFINED(oldinfo, sizeof(stat_mem_block_t));
+
     memcpy(newinfo+1, oldinfo+1, oldinfo->size);
 
-    if (oldinfo->prev) oldinfo->prev->next = oldinfo->next;
-    if (oldinfo->next) oldinfo->next->prev = oldinfo->prev;
+    if (oldinfo->prev) {
+        /* just need access for a short period */
+        VALGRIND_MAKE_MEM_DEFINED(oldinfo->prev, sizeof(stat_mem_block_t));
+        oldinfo->prev->next = oldinfo->next;
+        /* don't need access anymore */
+        VALGRIND_MAKE_MEM_NOACCESS(oldinfo->prev, sizeof(stat_mem_block_t));
+    }
+
+    if (oldinfo->next) {
+        /* just need access for a short period */
+        VALGRIND_MAKE_MEM_DEFINED(oldinfo->next, sizeof(stat_mem_block_t));
+        oldinfo->next->prev = oldinfo->prev;
+        /* don't need access anymore */
+        VALGRIND_MAKE_MEM_NOACCESS(oldinfo->next, sizeof(stat_mem_block_t));
+    }
 
     /* move ahead */
     if (oldinfo == stat_mem_block_root)
         stat_mem_block_root = oldinfo->next;
+
+    /* we need access to the redzone for the newinfo block */
+    VALGRIND_MAKE_MEM_DEFINED(newinfo, sizeof(stat_mem_block_t));
 
     newinfo->line = line;
     newinfo->size = size;
@@ -187,8 +250,17 @@ void *stat_mem_reallocate(void *ptr, size_t size, size_t line, const char *file)
     newinfo->prev = NULL;
     newinfo->next = stat_mem_block_root;
 
-    if (stat_mem_block_root)
+    /*
+     * likely since the only time there is no root is when it's
+     * being initialized first.
+     */
+    if (GMQCC_LIKELY(stat_mem_block_root != NULL)) {
+        /* we need access to the root */
+        VALGRIND_MAKE_MEM_DEFINED(stat_mem_block_root, sizeof(stat_mem_block_t));
         stat_mem_block_root->prev = newinfo;
+        /* kill access */
+        VALGRIND_MAKE_MEM_NOACCESS(stat_mem_block_root, sizeof(stat_mem_block_t));
+    }
 
     stat_mem_block_root = newinfo;
     stat_mem_allocated -= oldinfo->size;
@@ -196,11 +268,18 @@ void *stat_mem_reallocate(void *ptr, size_t size, size_t line, const char *file)
     stat_mem_allocated += newinfo->size;
     stat_mem_high      += newinfo->size;
 
+    /*
+     * we're finished with the redzones, lets kill the access
+     * to them.
+     */
+    VALGRIND_MAKE_MEM_NOACCESS(newinfo, sizeof(stat_mem_block_t));
+    VALGRIND_MAKE_MEM_NOACCESS(oldinfo, sizeof(stat_mem_block_t));
+
     if (stat_mem_high > stat_mem_peak)
         stat_mem_peak = stat_mem_high;
 
     free(oldinfo);
-
+    VALGRIND_FREELIKE_BLOCK(ptr, sizeof(stat_mem_block_t));
     return newinfo + 1;
 }
 
@@ -223,6 +302,7 @@ char *stat_mem_strdup(const char *src, size_t line, const char *file, bool empty
     }
 
     stat_used_strdups ++;
+    stat_mem_strdups  += len;
     return ptr;
 }
 
@@ -274,20 +354,20 @@ typedef struct hash_node_t {
  * This is a patched version of the Murmur2 hashing function to use
  * a proper pre-mix and post-mix setup. Infact this is Murmur3 for
  * the most part just reinvented.
- * 
+ *
  * Murmur 2 contains an inner loop such as:
  * while (l >= 4) {
  *      u32 k = *(u32*)d;
  *      k *= m;
  *      k ^= k >> r;
  *      k *= m;
- * 
+ *
  *      h *= m;
  *      h ^= k;
  *      d += 4;
  *      l -= 4;
  * }
- * 
+ *
  * The two u32s that form the key are the same value x (pulled from data)
  * this premix stage will perform the same results for both values. Unrolled
  * this produces just:
@@ -299,18 +379,18 @@ typedef struct hash_node_t {
  *  h ^= x;
  *  h *= m;
  *  h ^= x;
- * 
+ *
  * This appears to be fine, except what happens when m == 1? well x
  * cancels out entierly, leaving just:
  *  x ^= x >> r;
  *  h ^= x;
  *  h ^= x;
- * 
+ *
  * So all keys hash to the same value, but how often does m == 1?
  * well, it turns out testing x for all possible values yeilds only
  * 172,013,942 unique results instead of 2^32. So nearly ~4.6 bits
  * are cancelled out on average!
- * 
+ *
  * This means we have a 14.5% (rounded) chance of colliding more, which
  * results in another bucket/chain for the hashtable.
  *
@@ -332,7 +412,7 @@ GMQCC_INLINE size_t util_hthash(hash_table_t *ht, const char *key) {
     uint32_t k;
     uint32_t h = 0x1EF0 ^ len;
 
-    for (i = -block; i; i++) {
+    for (i = -((int)block); i; i++) {
         k  = blocks[i];
         k *= mask1;
         k  = GMQCC_ROTL32(k, 15);
@@ -507,6 +587,7 @@ void *util_htget(hash_table_t *ht, const char *key) {
     return util_htgeth(ht, key, util_hthash(ht, key));
 }
 
+void *code_util_str_htgeth(hash_table_t *ht, const char *key, size_t bin);
 void *code_util_str_htgeth(hash_table_t *ht, const char *key, size_t bin) {
     hash_node_t *pair;
     size_t len, keylen;
@@ -624,7 +705,11 @@ static void stat_dump_mem_contents(stat_mem_block_t *memory, uint16_t cols) {
 
 static void stat_dump_mem_leaks(void) {
     stat_mem_block_t *info;
+    /* we need access to the root for this */
+    VALGRIND_MAKE_MEM_DEFINED(stat_mem_block_root, sizeof(stat_mem_block_t));
     for (info = stat_mem_block_root; info; info = info->next) {
+        /* we need access to the block */
+        VALGRIND_MAKE_MEM_DEFINED(info, sizeof(stat_mem_block_t));
         con_out("lost: %u (bytes) at %s:%u\n",
             info->size,
             info->file,
@@ -632,7 +717,15 @@ static void stat_dump_mem_leaks(void) {
         );
 
         stat_dump_mem_contents(info, OPTS_OPTION_U16(OPTION_MEMDUMPCOLS));
+
+        /*
+         * we're finished with the access, the redzone should be marked
+         * inaccesible so that invalid read/writes that could 'step-into'
+         * those redzones will show up as invalid read/writes in valgrind.
+         */
+        VALGRIND_MAKE_MEM_NOACCESS(info, sizeof(stat_mem_block_t));
     }
+    VALGRIND_MAKE_MEM_NOACCESS(stat_mem_block_root, sizeof(stat_mem_block_t));
 }
 
 static void stat_dump_mem_info(void) {
@@ -679,12 +772,14 @@ void stat_info() {
         uint64_t mem = 0;
 
         con_out("Memory Statistics:\n\
-    Total vectors allocated:    %llu\n\
-    Total string duplicates:    %llu\n\
-    Total hashtables allocated: %llu\n\
-    Total unique vector sizes:  %llu\n",
+    Total vectors allocated:       %llu\n\
+    Total string duplicates:       %llu\n\
+    Total string duplicate memory: %f (MB)\n\
+    Total hashtables allocated:    %llu\n\
+    Total unique vector sizes:     %llu\n",
             stat_used_vectors,
             stat_used_strdups,
+            (float)(stat_mem_strdups) / 1048576.0f,
             stat_used_hashtables,
             stat_type_vectors
         );

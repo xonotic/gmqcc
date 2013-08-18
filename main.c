@@ -45,7 +45,6 @@ static ppitem  *ppems = NULL;
 #define TYPE_ASM 1
 #define TYPE_SRC 2
 
-
 static const char *app_name;
 
 static void version(void) {
@@ -178,7 +177,6 @@ static bool options_parse(int argc, char **argv) {
 
 
                     OPTS_OPTION_U32(OPTION_STANDARD) = COMPILER_GMQCC;
-                    OPTS_OPTION_BOOL(OPTION_STATISTICS) = true;
 
                 } else if (!strcmp(argarg, "qcc")) {
 
@@ -362,7 +360,7 @@ static bool options_parse(int argc, char **argv) {
                     else if (!strcmp(argv[0]+2, "NO_ERROR") ||
                              !strcmp(argv[0]+2, "NO_ERROR_ALL"))
                     {
-                        for (itr = 0; itr < sizeof(opts.werror)/sizeof(opts.werror[0]); ++itr)
+                        for (itr = 0; itr < GMQCC_ARRAY_COUNT(opts.werror); ++itr)
                             opts.werror[itr] = 0;
                         break;
                     }
@@ -370,19 +368,19 @@ static bool options_parse(int argc, char **argv) {
                              !strcmp(argv[0]+2, "ERROR_ALL"))
                     {
                         opts_backup_non_Werror_all();
-                        for (itr = 0; itr < sizeof(opts.werror)/sizeof(opts.werror[0]); ++itr)
+                        for (itr = 0; itr < GMQCC_ARRAY_COUNT(opts.werror); ++itr)
                             opts.werror[itr] = 0xFFFFFFFFL;
                         opts_restore_non_Werror_all();
                         break;
                     }
                     else if (!strcmp(argv[0]+2, "NONE")) {
-                        for (itr = 0; itr < sizeof(opts.warn)/sizeof(opts.warn[0]); ++itr)
+                        for (itr = 0; itr < GMQCC_ARRAY_COUNT(opts.warn); ++itr)
                             opts.warn[itr] = 0;
                         break;
                     }
                     else if (!strcmp(argv[0]+2, "ALL")) {
                         opts_backup_non_Wall();
-                        for (itr = 0; itr < sizeof(opts.warn)/sizeof(opts.warn[0]); ++itr)
+                        for (itr = 0; itr < GMQCC_ARRAY_COUNT(opts.warn); ++itr)
                             opts.warn[itr] = 0xFFFFFFFFL;
                         opts_restore_non_Wall();
                         break;
@@ -433,7 +431,8 @@ static bool options_parse(int argc, char **argv) {
                         else if (!strcmp(argarg, "ALL"))
                             opts_setoptimlevel(OPTS_OPTION_U32(OPTION_O) = 9999);
                         else if (!strncmp(argarg, "NO_", 3)) {
-                            if (!opts_setoptim(argarg+3, false)) {
+                            /* constant folding cannot be turned off for obvious reasons */
+                            if (!strcmp(argarg, "NO_CONST_FOLD") || !opts_setoptim(argarg+3, false)) {
                                 con_out("unknown optimization: %s\n", argarg+3);
                                 return false;
                             }
@@ -574,7 +573,7 @@ int main(int argc, char **argv) {
 
     app_name = argv[0];
     con_init ();
-    opts_init("progs.dat", COMPILER_GMQCC, (1024 << 3));
+    opts_init("progs.dat", COMPILER_QCC, (1024 << 3));
 
     util_seed(time(0));
 
@@ -590,13 +589,13 @@ int main(int argc, char **argv) {
     /* the standard decides which set of operators to use */
     if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_GMQCC) {
         operators      = c_operators;
-        operator_count = c_operator_count;
+        operator_count = GMQCC_ARRAY_COUNT(c_operators);
     } else if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_FTEQCC) {
         operators      = fte_operators;
-        operator_count = fte_operator_count;
+        operator_count = GMQCC_ARRAY_COUNT(fte_operators);
     } else {
         operators      = qcc_operators;
-        operator_count = qcc_operator_count;
+        operator_count = GMQCC_ARRAY_COUNT(qcc_operators);
     }
 
     if (operators == fte_operators) {
@@ -694,7 +693,7 @@ int main(int argc, char **argv) {
 
             if (!line[0] || (line[0] == '/' && line[1] == '/'))
                 continue;
-                
+
             if (hasline) {
                 item.filename = util_strdup(line);
                 item.type     = TYPE_QC;
@@ -777,17 +776,6 @@ int main(int argc, char **argv) {
             if (!parser_finish(parser, OPTS_OPTION_STR(OPTION_OUTPUT))) {
                 retval = 1;
                 goto cleanup;
-            }
-        }
-    }
-
-    /* stuff */
-    if (!OPTS_OPTION_BOOL(OPTION_QUIET) &&
-        !OPTS_OPTION_BOOL(OPTION_PP_ONLY))
-    {
-        for (itr = 0; itr < COUNT_OPTIMIZATIONS; ++itr) {
-            if (opts_optimizationcount[itr]) {
-                con_out("%s: %u\n", opts_opt_list[itr].name, (unsigned int)opts_optimizationcount[itr]);
             }
         }
     }

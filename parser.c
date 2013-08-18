@@ -24,91 +24,11 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+#include "parser.h"
 
-#include "gmqcc.h"
-#include "lexer.h"
-#include "ast.h"
-
-/* beginning of locals */
 #define PARSER_HT_LOCALS  2
-
-#define PARSER_HT_SIZE    128
-#define TYPEDEF_HT_SIZE   16
-
-typedef struct parser_s {
-    lex_file *lex;
-    int      tok;
-
-    bool     ast_cleaned;
-
-    ast_expression **globals;
-    ast_expression **fields;
-    ast_function **functions;
-    ast_value    **imm_float;
-    ast_value    **imm_string;
-    ast_value    **imm_vector;
-    size_t         translated;
-
-    ht ht_imm_string;
-    ht ht_imm_string_dotranslate;
-
-    /* must be deleted first, they reference immediates and values */
-    ast_value    **accessors;
-
-    ast_value *imm_float_zero;
-    ast_value *imm_float_one;
-    ast_value *imm_float_neg_one;
-
-    ast_value *imm_vector_zero;
-
-    ast_value *nil;
-    ast_value *reserved_version;
-
-    size_t crc_globals;
-    size_t crc_fields;
-
-    ast_function *function;
-    ht            aliases;
-
-    /* All the labels the function defined...
-     * Should they be in ast_function instead?
-     */
-    ast_label  **labels;
-    ast_goto   **gotos;
-    const char **breaks;
-    const char **continues;
-
-    /* A list of hashtables for each scope */
-    ht *variables;
-    ht htfields;
-    ht htglobals;
-    ht *typedefs;
-
-    /* same as above but for the spelling corrector */
-    correct_trie_t  **correct_variables;
-    size_t         ***correct_variables_score;  /* vector of vector of size_t* */
-
-    /* not to be used directly, we use the hash table */
-    ast_expression **_locals;
-    size_t          *_blocklocals;
-    ast_value      **_typedefs;
-    size_t          *_blocktypedefs;
-    lex_ctx         *_block_ctx;
-
-    /* we store the '=' operator info */
-    const oper_info *assign_op;
-
-    /* magic values */
-    ast_value *const_vec[3];
-
-    /* pragma flags */
-    bool noref;
-
-    /* collected information */
-    size_t     max_param_count;
-} parser_t;
-
-static ast_expression * const intrinsic_debug_typestring = (ast_expression*)0x1;
+#define PARSER_HT_SIZE    512
+#define TYPEDEF_HT_SIZE   512
 
 static void parser_enterblock(parser_t *parser);
 static bool parser_leaveblock(parser_t *parser);
@@ -146,42 +66,6 @@ static bool GMQCC_WARN parsewarning(parser_t *parser, int warntype, const char *
 }
 
 /**********************************************************************
- * some maths used for constant folding
- */
-
-vector vec3_add(vector a, vector b)
-{
-    vector out;
-    out.x = a.x + b.x;
-    out.y = a.y + b.y;
-    out.z = a.z + b.z;
-    return out;
-}
-
-vector vec3_sub(vector a, vector b)
-{
-    vector out;
-    out.x = a.x - b.x;
-    out.y = a.y - b.y;
-    out.z = a.z - b.z;
-    return out;
-}
-
-qcfloat vec3_mulvv(vector a, vector b)
-{
-    return (a.x * b.x + a.y * b.y + a.z * b.z);
-}
-
-vector vec3_mulvf(vector a, float b)
-{
-    vector out;
-    out.x = a.x * b;
-    out.y = a.y * b;
-    out.z = a.z * b;
-    return out;
-}
-
-/**********************************************************************
  * parsing
  */
 
@@ -200,53 +84,8 @@ static bool parser_next(parser_t *parser)
 
 #define parser_tokval(p) ((p)->lex->tok.value)
 #define parser_token(p)  (&((p)->lex->tok))
-#define parser_ctx(p)    ((p)->lex->tok.ctx)
 
-static ast_value* parser_const_float(parser_t *parser, double d)
-{
-    size_t i;
-    ast_value *out;
-    lex_ctx ctx;
-    for (i = 0; i < vec_size(parser->imm_float); ++i) {
-        const double compare = parser->imm_float[i]->constval.vfloat;
-        if (memcmp((const void*)&compare, (const void *)&d, sizeof(double)) == 0)
-            return parser->imm_float[i];
-    }
-    if (parser->lex)
-        ctx = parser_ctx(parser);
-    else {
-        memset(&ctx, 0, sizeof(ctx));
-    }
-    out = ast_value_new(ctx, "#IMMEDIATE", TYPE_FLOAT);
-    out->cvq      = CV_CONST;
-    out->hasvalue = true;
-    out->isimm    = true;
-    out->constval.vfloat = d;
-    vec_push(parser->imm_float, out);
-    return out;
-}
-
-static ast_value* parser_const_float_0(parser_t *parser)
-{
-    if (!parser->imm_float_zero)
-        parser->imm_float_zero = parser_const_float(parser, 0);
-    return parser->imm_float_zero;
-}
-
-static ast_value* parser_const_float_neg1(parser_t *parser) {
-    if (!parser->imm_float_neg_one)
-        parser->imm_float_neg_one = parser_const_float(parser, -1);
-    return parser->imm_float_neg_one;
-}
-
-static ast_value* parser_const_float_1(parser_t *parser)
-{
-    if (!parser->imm_float_one)
-        parser->imm_float_one = parser_const_float(parser, 1);
-    return parser->imm_float_one;
-}
-
-static char *parser_strdup(const char *str)
+char *parser_strdup(const char *str)
 {
     if (str && !*str) {
         /* actually dup empty strings */
@@ -255,74 +94,6 @@ static char *parser_strdup(const char *str)
         return out;
     }
     return util_strdup(str);
-}
-
-static ast_value* parser_const_string(parser_t *parser, const char *str, bool dotranslate)
-{
-    ht ht_string = (dotranslate)
-        ? parser->ht_imm_string_dotranslate
-        : parser->ht_imm_string;
-
-    ast_value *out;
-    size_t     hash = util_hthash(ht_string, str);
-
-    if ((out = (ast_value*)util_htgeth(ht_string, str, hash)))
-        return out;
-    /*
-    for (i = 0; i < vec_size(parser->imm_string); ++i) {
-        if (!strcmp(parser->imm_string[i]->constval.vstring, str))
-            return parser->imm_string[i];
-    }
-    */
-    if (dotranslate) {
-        char name[32];
-        util_snprintf(name, sizeof(name), "dotranslate_%lu", (unsigned long)(parser->translated++));
-        out = ast_value_new(parser_ctx(parser), name, TYPE_STRING);
-        out->expression.flags |= AST_FLAG_INCLUDE_DEF;
-    } else
-        out = ast_value_new(parser_ctx(parser), "#IMMEDIATE", TYPE_STRING);
-
-    out->cvq      = CV_CONST;
-    out->hasvalue = true;
-    out->isimm    = true;
-    out->constval.vstring = parser_strdup(str);
-    vec_push(parser->imm_string, out);
-    util_htseth(ht_string, str, hash, out);
-
-    return out;
-}
-
-static ast_value* parser_const_vector(parser_t *parser, vector v)
-{
-    size_t i;
-    ast_value *out;
-    for (i = 0; i < vec_size(parser->imm_vector); ++i) {
-        if (!memcmp(&parser->imm_vector[i]->constval.vvec, &v, sizeof(v)))
-            return parser->imm_vector[i];
-    }
-    out = ast_value_new(parser_ctx(parser), "#IMMEDIATE", TYPE_VECTOR);
-    out->cvq      = CV_CONST;
-    out->hasvalue = true;
-    out->isimm    = true;
-    out->constval.vvec = v;
-    vec_push(parser->imm_vector, out);
-    return out;
-}
-
-static ast_value* parser_const_vector_f(parser_t *parser, float x, float y, float z)
-{
-    vector v;
-    v.x = x;
-    v.y = y;
-    v.z = z;
-    return parser_const_vector(parser, v);
-}
-
-static ast_value* parser_const_vector_0(parser_t *parser)
-{
-    if (!parser->imm_vector_zero)
-        parser->imm_vector_zero = parser_const_vector_f(parser, 0, 0, 0);
-    return parser->imm_vector_zero;
 }
 
 static ast_expression* parser_find_field(parser_t *parser, const char *name)
@@ -339,7 +110,7 @@ static ast_expression* parser_find_label(parser_t *parser, const char *name)
     return NULL;
 }
 
-static ast_expression* parser_find_global(parser_t *parser, const char *name)
+ast_expression* parser_find_global(parser_t *parser, const char *name)
 {
     ast_expression *var = (ast_expression*)util_htget(parser->aliases, parser_tokval(parser));
     if (var)
@@ -401,9 +172,6 @@ static ast_value* parser_find_typedef(parser_t *parser, const char *name, size_t
     return NULL;
 }
 
-/* include intrinsics */
-#include "intrin.h"
-
 typedef struct
 {
     size_t etype; /* 0 = expression, others are operators */
@@ -411,7 +179,7 @@ typedef struct
     size_t          off;
     ast_expression *out;
     ast_block      *block; /* for commas and function calls */
-    lex_ctx ctx;
+    lex_ctx_t ctx;
 } sy_elem;
 
 enum {
@@ -429,7 +197,7 @@ typedef struct
     unsigned int   *paren;
 } shunt;
 
-static sy_elem syexp(lex_ctx ctx, ast_expression *v) {
+static sy_elem syexp(lex_ctx_t ctx, ast_expression *v) {
     sy_elem e;
     e.etype = 0;
     e.off   = 0;
@@ -440,7 +208,7 @@ static sy_elem syexp(lex_ctx ctx, ast_expression *v) {
     return e;
 }
 
-static sy_elem syblock(lex_ctx ctx, ast_block *v) {
+static sy_elem syblock(lex_ctx_t ctx, ast_block *v) {
     sy_elem e;
     e.etype = 0;
     e.off   = 0;
@@ -451,7 +219,7 @@ static sy_elem syblock(lex_ctx ctx, ast_block *v) {
     return e;
 }
 
-static sy_elem syop(lex_ctx ctx, const oper_info *op) {
+static sy_elem syop(lex_ctx_t ctx, const oper_info *op) {
     sy_elem e;
     e.etype = 1 + (op - operators);
     e.off   = 0;
@@ -462,7 +230,7 @@ static sy_elem syop(lex_ctx ctx, const oper_info *op) {
     return e;
 }
 
-static sy_elem syparen(lex_ctx ctx, size_t off) {
+static sy_elem syparen(lex_ctx_t ctx, size_t off) {
     sy_elem e;
     e.etype = 0;
     e.off   = off;
@@ -485,7 +253,7 @@ static bool rotate_entfield_array_index_nodes(ast_expression **out)
     ast_expression  *sub;
     ast_expression  *entity;
 
-    lex_ctx ctx = ast_ctx(*out);
+    lex_ctx_t ctx = ast_ctx(*out);
 
     if (!ast_istype(*out, ast_array_index))
         return false;
@@ -515,43 +283,17 @@ static bool rotate_entfield_array_index_nodes(ast_expression **out)
     return true;
 }
 
-static bool immediate_is_true(lex_ctx ctx, ast_value *v)
-{
-    switch (v->expression.vtype) {
-        case TYPE_FLOAT:
-            return !!v->constval.vfloat;
-        case TYPE_INTEGER:
-            return !!v->constval.vint;
-        case TYPE_VECTOR:
-            if (OPTS_FLAG(CORRECT_LOGIC))
-                return v->constval.vvec.x &&
-                       v->constval.vvec.y &&
-                       v->constval.vvec.z;
-            else
-                return !!(v->constval.vvec.x);
-        case TYPE_STRING:
-            if (!v->constval.vstring)
-                return false;
-            if (v->constval.vstring && OPTS_FLAG(TRUE_EMPTY_STRINGS))
-                return true;
-            return !!v->constval.vstring[0];
-        default:
-            compile_error(ctx, "internal error: immediate_is_true on invalid type");
-            return !!v->constval.vfunc;
-    }
-}
-
 static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
 {
     const oper_info *op;
-    lex_ctx ctx;
+    lex_ctx_t ctx;
     ast_expression *out = NULL;
     ast_expression *exprs[3];
     ast_block      *blocks[3];
     ast_value      *asvalue[3];
     ast_binstore   *asbinstore;
     size_t i, assignop, addop, subop;
-    qcint  generated_op = 0;
+    qcint_t  generated_op = 0;
 
     char ty1[1024];
     char ty2[1024];
@@ -607,14 +349,6 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
 #define NotSameType(T) \
              (exprs[0]->vtype != exprs[1]->vtype || \
               exprs[0]->vtype != T)
-#define CanConstFold1(A) \
-             (ast_istype((A), ast_value) && ((ast_value*)(A))->hasvalue && (((ast_value*)(A))->cvq == CV_CONST) &&\
-              (A)->vtype != TYPE_FUNCTION)
-#define CanConstFold(A, B) \
-             (CanConstFold1(A) && CanConstFold1(B))
-#define ConstV(i) (asvalue[(i)]->constval.vvec)
-#define ConstF(i) (asvalue[(i)]->constval.vfloat)
-#define ConstS(i) (asvalue[(i)]->constval.vstring)
     switch (op->id)
     {
         default:
@@ -709,132 +443,105 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             out = exprs[0];
             break;
         case opid2('-','P'):
-            switch (exprs[0]->vtype) {
-                case TYPE_FLOAT:
-                    if (CanConstFold1(exprs[0]))
-                        out = (ast_expression*)parser_const_float(parser, -ConstF(0));
-                    else
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                switch (exprs[0]->vtype) {
+                    case TYPE_FLOAT:
                         out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F,
-                                                              (ast_expression*)parser_const_float_0(parser),
-                                                              exprs[0]);
-                    break;
-                case TYPE_VECTOR:
-                    if (CanConstFold1(exprs[0]))
-                        out = (ast_expression*)parser_const_vector_f(parser,
-                            -ConstV(0).x, -ConstV(0).y, -ConstV(0).z);
-                    else
+                                                                  (ast_expression*)parser->fold->imm_float[0],
+                                                                  exprs[0]);
+                        break;
+                    case TYPE_VECTOR:
                         out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_V,
-                                                              (ast_expression*)parser_const_vector_0(parser),
-                                                              exprs[0]);
-                    break;
-                default:
-                compile_error(ctx, "invalid types used in expression: cannot negate type %s",
-                              type_name[exprs[0]->vtype]);
-                return false;
+                                                                  (ast_expression*)parser->fold->imm_vector[0],
+                                                                  exprs[0]);
+                        break;
+                    default:
+                    compile_error(ctx, "invalid types used in expression: cannot negate type %s",
+                                  type_name[exprs[0]->vtype]);
+                    return false;
+                }
             }
             break;
 
         case opid2('!','P'):
-            switch (exprs[0]->vtype) {
-                case TYPE_FLOAT:
-                    if (CanConstFold1(exprs[0]))
-                        out = (ast_expression*)parser_const_float(parser, !ConstF(0));
-                    else
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                switch (exprs[0]->vtype) {
+                    case TYPE_FLOAT:
                         out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_F, exprs[0]);
-                    break;
-                case TYPE_VECTOR:
-                    if (CanConstFold1(exprs[0]))
-                        out = (ast_expression*)parser_const_float(parser,
-                            (!ConstV(0).x && !ConstV(0).y && !ConstV(0).z));
-                    else
+                        break;
+                    case TYPE_VECTOR:
                         out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_V, exprs[0]);
-                    break;
-                case TYPE_STRING:
-                    if (CanConstFold1(exprs[0])) {
-                        if (OPTS_FLAG(TRUE_EMPTY_STRINGS))
-                            out = (ast_expression*)parser_const_float(parser, !ConstS(0));
-                        else
-                            out = (ast_expression*)parser_const_float(parser, !ConstS(0) || !*ConstS(0));
-                    } else {
+                        break;
+                    case TYPE_STRING:
                         if (OPTS_FLAG(TRUE_EMPTY_STRINGS))
                             out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_F, exprs[0]);
                         else
                             out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_S, exprs[0]);
-                    }
-                    break;
-                /* we don't constant-fold NOT for these types */
-                case TYPE_ENTITY:
-                    out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_ENT, exprs[0]);
-                    break;
-                case TYPE_FUNCTION:
-                    out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_FNC, exprs[0]);
-                    break;
-                default:
-                compile_error(ctx, "invalid types used in expression: cannot logically negate type %s",
-                              type_name[exprs[0]->vtype]);
-                return false;
+                        break;
+                    /* we don't constant-fold NOT for these types */
+                    case TYPE_ENTITY:
+                        out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_ENT, exprs[0]);
+                        break;
+                    case TYPE_FUNCTION:
+                        out = (ast_expression*)ast_unary_new(ctx, INSTR_NOT_FNC, exprs[0]);
+                        break;
+                    default:
+                    compile_error(ctx, "invalid types used in expression: cannot logically negate type %s",
+                                  type_name[exprs[0]->vtype]);
+                    return false;
+                }
             }
             break;
 
         case opid1('+'):
             if (exprs[0]->vtype != exprs[1]->vtype ||
-                (exprs[0]->vtype != TYPE_VECTOR && exprs[0]->vtype != TYPE_FLOAT) )
+               (exprs[0]->vtype != TYPE_VECTOR && exprs[0]->vtype != TYPE_FLOAT) )
             {
                 compile_error(ctx, "invalid types used in expression: cannot add type %s and %s",
                               type_name[exprs[0]->vtype],
                               type_name[exprs[1]->vtype]);
                 return false;
             }
-            switch (exprs[0]->vtype) {
-                case TYPE_FLOAT:
-                    if (CanConstFold(exprs[0], exprs[1]))
-                    {
-                        out = (ast_expression*)parser_const_float(parser, ConstF(0) + ConstF(1));
-                    }
-                    else
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                switch (exprs[0]->vtype) {
+                    case TYPE_FLOAT:
                         out = (ast_expression*)ast_binary_new(ctx, INSTR_ADD_F, exprs[0], exprs[1]);
-                    break;
-                case TYPE_VECTOR:
-                    if (CanConstFold(exprs[0], exprs[1]))
-                        out = (ast_expression*)parser_const_vector(parser, vec3_add(ConstV(0), ConstV(1)));
-                    else
+                        break;
+                    case TYPE_VECTOR:
                         out = (ast_expression*)ast_binary_new(ctx, INSTR_ADD_V, exprs[0], exprs[1]);
-                    break;
-                default:
-                    compile_error(ctx, "invalid types used in expression: cannot add type %s and %s",
-                                  type_name[exprs[0]->vtype],
-                                  type_name[exprs[1]->vtype]);
-                    return false;
-            };
+                        break;
+                    default:
+                        compile_error(ctx, "invalid types used in expression: cannot add type %s and %s",
+                                      type_name[exprs[0]->vtype],
+                                      type_name[exprs[1]->vtype]);
+                        return false;
+                }
+            }
             break;
         case opid1('-'):
-            if (exprs[0]->vtype != exprs[1]->vtype ||
-                (exprs[0]->vtype != TYPE_VECTOR && exprs[0]->vtype != TYPE_FLOAT) )
+            if  (exprs[0]->vtype != exprs[1]->vtype ||
+                (exprs[0]->vtype != TYPE_VECTOR && exprs[0]->vtype != TYPE_FLOAT))
             {
                 compile_error(ctx, "invalid types used in expression: cannot subtract type %s from %s",
                               type_name[exprs[1]->vtype],
                               type_name[exprs[0]->vtype]);
                 return false;
             }
-            switch (exprs[0]->vtype) {
-                case TYPE_FLOAT:
-                    if (CanConstFold(exprs[0], exprs[1]))
-                        out = (ast_expression*)parser_const_float(parser, ConstF(0) - ConstF(1));
-                    else
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                switch (exprs[0]->vtype) {
+                    case TYPE_FLOAT:
                         out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F, exprs[0], exprs[1]);
-                    break;
-                case TYPE_VECTOR:
-                    if (CanConstFold(exprs[0], exprs[1]))
-                        out = (ast_expression*)parser_const_vector(parser, vec3_sub(ConstV(0), ConstV(1)));
-                    else
+                        break;
+                    case TYPE_VECTOR:
                         out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_V, exprs[0], exprs[1]);
-                    break;
-                default:
-                    compile_error(ctx, "invalid types used in expression: cannot subtract type %s from %s",
-                                  type_name[exprs[1]->vtype],
-                                  type_name[exprs[0]->vtype]);
-                    return false;
-            };
+                        break;
+                    default:
+                        compile_error(ctx, "invalid types used in expression: cannot subtract type %s from %s",
+                                      type_name[exprs[1]->vtype],
+                                      type_name[exprs[0]->vtype]);
+                        return false;
+                }
+            }
             break;
         case opid1('*'):
             if (exprs[0]->vtype != exprs[1]->vtype &&
@@ -849,104 +556,29 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                               type_name[exprs[0]->vtype]);
                 return false;
             }
-            switch (exprs[0]->vtype) {
-                case TYPE_FLOAT:
-                    if (exprs[1]->vtype == TYPE_VECTOR)
-                    {
-                        if (CanConstFold(exprs[0], exprs[1]))
-                            out = (ast_expression*)parser_const_vector(parser, vec3_mulvf(ConstV(1), ConstF(0)));
-                        else
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                switch (exprs[0]->vtype) {
+                    case TYPE_FLOAT:
+                        if (exprs[1]->vtype == TYPE_VECTOR)
                             out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_FV, exprs[0], exprs[1]);
-                    }
-                    else
-                    {
-                        if (CanConstFold(exprs[0], exprs[1]))
-                            out = (ast_expression*)parser_const_float(parser, ConstF(0) * ConstF(1));
                         else
                             out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_F, exprs[0], exprs[1]);
-                    }
-                    break;
-                case TYPE_VECTOR:
-                    if (exprs[1]->vtype == TYPE_FLOAT)
-                    {
-                        if (CanConstFold(exprs[0], exprs[1]))
-                            out = (ast_expression*)parser_const_vector(parser, vec3_mulvf(ConstV(0), ConstF(1)));
-                        else
+                        break;
+                    case TYPE_VECTOR:
+                        if (exprs[1]->vtype == TYPE_FLOAT)
                             out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_VF, exprs[0], exprs[1]);
-                    }
-                    else
-                    {
-                        if (CanConstFold(exprs[0], exprs[1]))
-                            out = (ast_expression*)parser_const_float(parser, vec3_mulvv(ConstV(0), ConstV(1)));
-                        else if (OPTS_OPTIMIZATION(OPTIM_VECTOR_COMPONENTS) && CanConstFold1(exprs[0])) {
-                            vector vec = ConstV(0);
-                            if (!vec.y && !vec.z) { /* 'n 0 0' * v */
-                                ++opts_optimizationcount[OPTIM_VECTOR_COMPONENTS];
-                                out = (ast_expression*)ast_member_new(ctx, exprs[1], 0, NULL);
-                                out->node.keep = false;
-                                ((ast_member*)out)->rvalue = true;
-                                if (vec.x != 1)
-                                    out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_F, (ast_expression*)parser_const_float(parser, vec.x), out);
-                            }
-                            else if (!vec.x && !vec.z) { /* '0 n 0' * v */
-                                ++opts_optimizationcount[OPTIM_VECTOR_COMPONENTS];
-                                out = (ast_expression*)ast_member_new(ctx, exprs[1], 1, NULL);
-                                out->node.keep = false;
-                                ((ast_member*)out)->rvalue = true;
-                                if (vec.y != 1)
-                                    out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_F, (ast_expression*)parser_const_float(parser, vec.y), out);
-                            }
-                            else if (!vec.x && !vec.y) { /* '0 n 0' * v */
-                                ++opts_optimizationcount[OPTIM_VECTOR_COMPONENTS];
-                                out = (ast_expression*)ast_member_new(ctx, exprs[1], 2, NULL);
-                                out->node.keep = false;
-                                ((ast_member*)out)->rvalue = true;
-                                if (vec.z != 1)
-                                    out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_F, (ast_expression*)parser_const_float(parser, vec.z), out);
-                            }
-                            else
-                                out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_V, exprs[0], exprs[1]);
-                        }
-                        else if (OPTS_OPTIMIZATION(OPTIM_VECTOR_COMPONENTS) && CanConstFold1(exprs[1])) {
-                            vector vec = ConstV(1);
-                            if (!vec.y && !vec.z) { /* v * 'n 0 0' */
-                                ++opts_optimizationcount[OPTIM_VECTOR_COMPONENTS];
-                                out = (ast_expression*)ast_member_new(ctx, exprs[0], 0, NULL);
-                                out->node.keep = false;
-                                ((ast_member*)out)->rvalue = true;
-                                if (vec.x != 1)
-                                    out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_F, out, (ast_expression*)parser_const_float(parser, vec.x));
-                            }
-                            else if (!vec.x && !vec.z) { /* v * '0 n 0' */
-                                ++opts_optimizationcount[OPTIM_VECTOR_COMPONENTS];
-                                out = (ast_expression*)ast_member_new(ctx, exprs[0], 1, NULL);
-                                out->node.keep = false;
-                                ((ast_member*)out)->rvalue = true;
-                                if (vec.y != 1)
-                                    out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_F, out, (ast_expression*)parser_const_float(parser, vec.y));
-                            }
-                            else if (!vec.x && !vec.y) { /* v * '0 n 0' */
-                                ++opts_optimizationcount[OPTIM_VECTOR_COMPONENTS];
-                                out = (ast_expression*)ast_member_new(ctx, exprs[0], 2, NULL);
-                                out->node.keep = false;
-                                ((ast_member*)out)->rvalue = true;
-                                if (vec.z != 1)
-                                    out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_F, out, (ast_expression*)parser_const_float(parser, vec.z));
-                            }
-                            else
-                                out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_V, exprs[0], exprs[1]);
-                        }
                         else
                             out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_V, exprs[0], exprs[1]);
-                    }
-                    break;
-                default:
-                    compile_error(ctx, "invalid types used in expression: cannot multiply types %s and %s",
-                                  type_name[exprs[1]->vtype],
-                                  type_name[exprs[0]->vtype]);
-                    return false;
-            };
+                        break;
+                    default:
+                        compile_error(ctx, "invalid types used in expression: cannot multiply types %s and %s",
+                                      type_name[exprs[1]->vtype],
+                                      type_name[exprs[0]->vtype]);
+                        return false;
+                }
+            }
             break;
+
         case opid1('/'):
             if (exprs[1]->vtype != TYPE_FLOAT) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
@@ -954,36 +586,15 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 compile_error(ctx, "invalid types used in expression: cannot divide types %s and %s", ty1, ty2);
                 return false;
             }
-            if (exprs[0]->vtype == TYPE_FLOAT) {
-                if (CanConstFold(exprs[0], exprs[1]))
-                    out = (ast_expression*)parser_const_float(parser, ConstF(0) / ConstF(1));
-                else
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                if (exprs[0]->vtype == TYPE_FLOAT)
                     out = (ast_expression*)ast_binary_new(ctx, INSTR_DIV_F, exprs[0], exprs[1]);
-            }
-            else if (exprs[0]->vtype == TYPE_VECTOR) {
-                if (CanConstFold(exprs[0], exprs[1]))
-                    out = (ast_expression*)parser_const_vector(parser, vec3_mulvf(ConstV(0), 1.0/ConstF(1)));
                 else {
-                    if (CanConstFold1(exprs[1])) {
-                        out = (ast_expression*)parser_const_float(parser, 1.0 / ConstF(1));
-                    } else {
-                        out = (ast_expression*)ast_binary_new(ctx, INSTR_DIV_F,
-                                                              (ast_expression*)parser_const_float_1(parser),
-                                                              exprs[1]);
-                    }
-                    if (!out) {
-                        compile_error(ctx, "internal error: failed to generate division");
-                        return false;
-                    }
-                    out = (ast_expression*)ast_binary_new(ctx, INSTR_MUL_VF, exprs[0], out);
+                    ast_type_to_string(exprs[0], ty1, sizeof(ty1));
+                    ast_type_to_string(exprs[1], ty2, sizeof(ty2));
+                    compile_error(ctx, "invalid types used in expression: cannot divide types %s and %s", ty1, ty2);
+                    return false;
                 }
-            }
-            else
-            {
-                ast_type_to_string(exprs[0], ty1, sizeof(ty1));
-                ast_type_to_string(exprs[1], ty2, sizeof(ty2));
-                compile_error(ctx, "invalid types used in expression: cannot divide types %s and %s", ty1, ty2);
-                return false;
             }
             break;
 
@@ -993,13 +604,9 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                     type_name[exprs[0]->vtype],
                     type_name[exprs[1]->vtype]);
                 return false;
-            }
-            if (CanConstFold(exprs[0], exprs[1])) {
-                out = (ast_expression*)parser_const_float(parser,
-                            (float)(((qcint)ConstF(0)) % ((qcint)ConstF(1))));
-            } else {
+            } else if (!(out = fold_op(parser->fold, op, exprs))) {
                 /* generate a call to __builtin_mod */
-                ast_expression *mod  = intrin_func(parser, "mod");
+                ast_expression *mod  = intrin_func(parser->intrin, "mod");
                 ast_call       *call = NULL;
                 if (!mod) return false; /* can return null for missing floor */
 
@@ -1023,11 +630,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                               type_name[exprs[1]->vtype]);
                 return false;
             }
-            if (CanConstFold(exprs[0], exprs[1]))
-                out = (ast_expression*)parser_const_float(parser,
-                    (op->id == opid1('|') ? (float)( ((qcint)ConstF(0)) | ((qcint)ConstF(1)) ) :
-                                            (float)( ((qcint)ConstF(0)) & ((qcint)ConstF(1)) ) ));
-            else
+            if (!(out = fold_op(parser->fold, op, exprs)))
                 out = (ast_expression*)ast_binary_new(ctx,
                     (op->id == opid1('|') ? INSTR_BITOR : INSTR_BITAND),
                     exprs[0], exprs[1]);
@@ -1043,20 +646,20 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
              * Further more, the only time it is legal to do XOR otherwise
              * is when both operand are floats. This nicely crafted if
              * statement catches them all.
-             * 
+             *
              * In the event that the first operand is a vector, two
              * possible situations can arise, thus, each element of
              * vector A (operand A) is exclusive-ORed with the corresponding
              * element of vector B (operand B), If B is scalar, the
              * scalar value is first replicated for each element.
-             * 
+             *
              * The QCVM itself lacks a BITXOR instruction. Thus emulating
              * the mathematics of it is required. The following equation
              * is used: (LHS | RHS) & ~(LHS & RHS). However, due to the
              * QCVM also lacking a BITNEG instruction, we need to emulate
              * ~FOO with -1 - FOO, the whole process becoming this nicely
              * crafted expression: (LHS | RHS) & (-1 - (LHS & RHS)).
-             * 
+             *
              * When A is not scalar, this process is repeated for all
              * components of vector A with the value in operand B,
              * only if operand B is scalar. When A is not scalar, and B
@@ -1064,7 +667,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
              * components of the vector A with the components of vector B.
              * Finally when A is scalar and B is scalar, this process is
              * simply used once for A and B being LHS and RHS respectfully.
-             * 
+             *
              * Yes the semantics are a bit strange (no pun intended).
              * But then again BITXOR is strange itself, consdering it's
              * commutative, assocative, and elements of the BITXOR operation
@@ -1080,18 +683,16 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 return false;
             }
 
-            /*
-             * IF the first expression is float, the following will be too
-             * since scalar ^ vector is not allowed.
-             */
-            if (exprs[0]->vtype == TYPE_FLOAT) {
-                if(CanConstFold(exprs[0], exprs[1])) {
-                    out = (ast_expression*)parser_const_float(parser, (float)((qcint)(ConstF(0)) ^ ((qcint)(ConstF(1)))));
-                } else {
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                /*
+                 * IF the first expression is float, the following will be too
+                 * since scalar ^ vector is not allowed.
+                 */
+                if (exprs[0]->vtype == TYPE_FLOAT) {
                     ast_binary *expr = ast_binary_new(
                         ctx,
                         INSTR_SUB_F,
-                        (ast_expression*)parser_const_float_neg1(parser),
+                        (ast_expression*)parser->fold->imm_float[2],
                         (ast_expression*)ast_binary_new(
                             ctx,
                             INSTR_BITAND,
@@ -1100,7 +701,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                         )
                     );
                     expr->refs = AST_REF_NONE;
-                    
+
                     out = (ast_expression*)
                         ast_binary_new(
                             ctx,
@@ -1113,82 +714,41 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                             ),
                             (ast_expression*)expr
                         );
-                }
-            } else {
-                /*
-                 * The first is a vector: vector is allowed to xor with vector and
-                 * with scalar, branch here for the second operand.
-                 */
-                if (exprs[1]->vtype == TYPE_VECTOR) {
-                    /*
-                     * Xor all the values of the vector components against the
-                     * vectors components in question.
-                     */
-                    if (CanConstFold(exprs[0], exprs[1])) {
-                        out = (ast_expression*)parser_const_vector_f(
-                            parser,
-                            (float)(((qcint)(ConstV(0).x)) ^ ((qcint)(ConstV(1).x))),
-                            (float)(((qcint)(ConstV(0).y)) ^ ((qcint)(ConstV(1).y))),
-                            (float)(((qcint)(ConstV(0).z)) ^ ((qcint)(ConstV(1).z)))
-                        );
-                    } else {
-                        compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor for vector against vector");
-                        return false;
-                    }
                 } else {
                     /*
-                     * Xor all the values of the vector components against the
-                     * scalar in question.
+                     * The first is a vector: vector is allowed to xor with vector and
+                     * with scalar, branch here for the second operand.
                      */
-                    if (CanConstFold(exprs[0], exprs[1])) {
-                        out = (ast_expression*)parser_const_vector_f(
-                            parser,
-                            (float)(((qcint)(ConstV(0).x)) ^ ((qcint)(ConstF(1)))),
-                            (float)(((qcint)(ConstV(0).y)) ^ ((qcint)(ConstF(1)))),
-                            (float)(((qcint)(ConstV(0).z)) ^ ((qcint)(ConstF(1))))
-                        );
+                    if (exprs[1]->vtype == TYPE_VECTOR) {
+                        /*
+                         * Xor all the values of the vector components against the
+                         * vectors components in question.
+                         */
+                        compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor for vector against vector");
+                        return false;
                     } else {
                         compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor for vector against float");
                         return false;
                     }
                 }
             }
-                
             break;
 
         case opid2('<','<'):
         case opid2('>','>'):
-            if (CanConstFold(exprs[0], exprs[1]) && ! NotSameType(TYPE_FLOAT)) {
-                if (op->id == opid2('<','<'))
-                    out = (ast_expression*)parser_const_float(parser, (double)((unsigned int)(ConstF(0)) << (unsigned int)(ConstF(1))));
-                else
-                    out = (ast_expression*)parser_const_float(parser, (double)((unsigned int)(ConstF(0)) >> (unsigned int)(ConstF(1))));
-                break;
-            }
         case opid3('<','<','='):
         case opid3('>','>','='):
-            compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-shifts");
-            return false;
+            if(!(out = fold_op(parser->fold, op, exprs))) {
+                compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-shifts");
+                return false;
+            }
+            break;
 
         case opid2('|','|'):
             generated_op += 1; /* INSTR_OR */
         case opid2('&','&'):
             generated_op += INSTR_AND;
-            if (CanConstFold(exprs[0], exprs[1]))
-            {
-                if (OPTS_FLAG(PERL_LOGIC)) {
-                    if (immediate_is_true(ctx, asvalue[0]))
-                        out = exprs[1];
-                }
-                else
-                    out = (ast_expression*)parser_const_float(parser,
-                          ( (generated_op == INSTR_OR)
-                            ? (immediate_is_true(ctx, asvalue[0]) || immediate_is_true(ctx, asvalue[1]))
-                            : (immediate_is_true(ctx, asvalue[0]) && immediate_is_true(ctx, asvalue[1])) )
-                          ? 1 : 0);
-            }
-            else
-            {
+            if (!(out = fold_op(parser->fold, op, exprs))) {
                 if (OPTS_FLAG(PERL_LOGIC) && !ast_compare_type(exprs[0], exprs[1])) {
                     ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                     ast_type_to_string(exprs[1], ty2, sizeof(ty2));
@@ -1235,9 +795,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 compile_error(ctx, "operands of ternary expression must have the same type, got %s and %s", ty1, ty2);
                 return false;
             }
-            if (CanConstFold1(exprs[0]))
-                out = (immediate_is_true(ctx, asvalue[0]) ? exprs[1] : exprs[2]);
-            else
+            if (!(out = fold_op(parser->fold, op, exprs)))
                 out = (ast_expression*)ast_ternary_new(ctx, exprs[0], exprs[1], exprs[2]);
             break;
 
@@ -1247,14 +805,11 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
                 compile_error(ctx, "invalid types used in exponentiation: %s and %s",
                     ty1, ty2);
-
                 return false;
             }
 
-            if (CanConstFold(exprs[0], exprs[1])) {
-                out = (ast_expression*)parser_const_float(parser, powf(ConstF(0), ConstF(1)));
-            } else {
-                ast_call *gencall = ast_call_new(parser_ctx(parser), intrin_func(parser, "pow"));
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                ast_call *gencall = ast_call_new(parser_ctx(parser), intrin_func(parser->intrin, "pow"));
                 vec_push(gencall->params, exprs[0]);
                 vec_push(gencall->params, exprs[1]);
                 out = (ast_expression*)gencall;
@@ -1271,14 +826,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 return false;
             }
 
-            if (CanConstFold(exprs[0], exprs[1])) {
-                if (ConstF(0) < ConstF(1))
-                    out = (ast_expression*)parser_const_float_neg1(parser);
-                else if (ConstF(0) == ConstF(1))
-                    out = (ast_expression*)parser_const_float_0(parser);
-                else if (ConstF(0) > ConstF(1))
-                    out = (ast_expression*)parser_const_float_1(parser);
-            } else {
+            if (!(out = fold_op(parser->fold, op, exprs))) {
                 ast_binary *eq = ast_binary_new(ctx, INSTR_EQ_F, exprs[0], exprs[1]);
 
                 eq->refs = AST_REF_NONE;
@@ -1287,15 +835,15 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 out = (ast_expression*)ast_ternary_new(ctx,
                         (ast_expression*)ast_binary_new(ctx, INSTR_LT, exprs[0], exprs[1]),
                         /* out = -1 */
-                        (ast_expression*)parser_const_float_neg1(parser),
+                        (ast_expression*)parser->fold->imm_float[2],
                     /* } else { */
                         /* if (eq) { */
                         (ast_expression*)ast_ternary_new(ctx, (ast_expression*)eq,
                             /* out = 0 */
-                            (ast_expression*)parser_const_float_0(parser),
+                            (ast_expression*)parser->fold->imm_float[0],
                         /* } else { */
                             /* out = 1 */
-                            (ast_expression*)parser_const_float_1(parser)
+                            (ast_expression*)parser->fold->imm_float[1]
                         /* } */
                         )
                     /* } */
@@ -1318,7 +866,8 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                               type_name[exprs[1]->vtype]);
                 return false;
             }
-            out = (ast_expression*)ast_binary_new(ctx, generated_op, exprs[0], exprs[1]);
+            if (!(out = fold_op(parser->fold, op, exprs)))
+                out = (ast_expression*)ast_binary_new(ctx, generated_op, exprs[0], exprs[1]);
             break;
         case opid2('!', '='):
             if (exprs[0]->vtype != exprs[1]->vtype) {
@@ -1327,7 +876,8 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                               type_name[exprs[1]->vtype]);
                 return false;
             }
-            out = (ast_expression*)ast_binary_new(ctx, type_ne_instr[exprs[0]->vtype], exprs[0], exprs[1]);
+            if (!(out = fold_op(parser->fold, op, exprs)))
+                out = (ast_expression*)ast_binary_new(ctx, type_ne_instr[exprs[0]->vtype], exprs[0], exprs[1]);
             break;
         case opid2('=', '='):
             if (exprs[0]->vtype != exprs[1]->vtype) {
@@ -1336,7 +886,8 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                               type_name[exprs[1]->vtype]);
                 return false;
             }
-            out = (ast_expression*)ast_binary_new(ctx, type_eq_instr[exprs[0]->vtype], exprs[0], exprs[1]);
+            if (!(out = fold_op(parser->fold, op, exprs)))
+                out = (ast_expression*)ast_binary_new(ctx, type_eq_instr[exprs[0]->vtype], exprs[0], exprs[1]);
             break;
 
         case opid1('='):
@@ -1420,11 +971,11 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             if (ast_istype(exprs[0], ast_entfield)) {
                 out = (ast_expression*)ast_binstore_new(ctx, INSTR_STOREP_F, addop,
                                                         exprs[0],
-                                                        (ast_expression*)parser_const_float_1(parser));
+                                                        (ast_expression*)parser->fold->imm_float[1]);
             } else {
                 out = (ast_expression*)ast_binstore_new(ctx, INSTR_STORE_F, addop,
                                                         exprs[0],
-                                                        (ast_expression*)parser_const_float_1(parser));
+                                                        (ast_expression*)parser->fold->imm_float[1]);
             }
             break;
         case opid3('S','+','+'):
@@ -1448,17 +999,17 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             if (ast_istype(exprs[0], ast_entfield)) {
                 out = (ast_expression*)ast_binstore_new(ctx, INSTR_STOREP_F, addop,
                                                         exprs[0],
-                                                        (ast_expression*)parser_const_float_1(parser));
+                                                        (ast_expression*)parser->fold->imm_float[1]);
             } else {
                 out = (ast_expression*)ast_binstore_new(ctx, INSTR_STORE_F, addop,
                                                         exprs[0],
-                                                        (ast_expression*)parser_const_float_1(parser));
+                                                        (ast_expression*)parser->fold->imm_float[1]);
             }
             if (!out)
                 return false;
             out = (ast_expression*)ast_binary_new(ctx, subop,
                                                   out,
-                                                  (ast_expression*)parser_const_float_1(parser));
+                                                  (ast_expression*)parser->fold->imm_float[1]);
             break;
         case opid2('+','='):
         case opid2('-','='):
@@ -1526,14 +1077,9 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                         out = (ast_expression*)ast_binstore_new(ctx, assignop, INSTR_MUL_VF,
                                                                 exprs[0], exprs[1]);
                     } else {
-                        /* there's no DIV_VF */
-                        if (CanConstFold1(exprs[1])) {
-                            out = (ast_expression*)parser_const_float(parser, 1.0 / ConstF(1));
-                        } else {
-                            out = (ast_expression*)ast_binary_new(ctx, INSTR_DIV_F,
-                                                                  (ast_expression*)parser_const_float_1(parser),
+                        out = (ast_expression*)ast_binary_new(ctx, INSTR_DIV_F,
+                                                                  (ast_expression*)parser->fold->imm_float[1],
                                                                   exprs[1]);
-                        }
                         if (!out) {
                             compile_error(ctx, "internal error: failed to generate division");
                             return false;
@@ -1602,16 +1148,11 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 compile_error(ast_ctx(exprs[0]), "invalid type for bit not: %s", ty1);
                 return false;
             }
-
-            if(CanConstFold1(exprs[0]))
-                out = (ast_expression*)parser_const_float(parser, ~(qcint)ConstF(0));
-            else
-                out = (ast_expression*)
-                    ast_binary_new(ctx, INSTR_SUB_F, (ast_expression*)parser_const_float_neg1(parser), exprs[0]);
+            if (!(out = fold_op(parser->fold, op, exprs)))
+                out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F, (ast_expression*)parser->fold->imm_float[2], exprs[0]);
             break;
     }
 #undef NotSameType
-
     if (!out) {
         compile_error(ctx, "failed to apply operator %s", op->op);
         return false;
@@ -1653,9 +1194,11 @@ static bool parser_close_call(parser_t *parser, shunt *sy)
         return false;
     }
 
-    fun = sy->out[fid].out;
-
-    if (fun == intrinsic_debug_typestring) {
+    /*
+     * TODO handle this at the intrinsic level with an ast_intrinsic
+     * node and codegen.
+     */
+    if ((fun = sy->out[fid].out) == intrin_debug_typestring(parser->intrin)) {
         char ty[1024];
         if (fid+2 != vec_size(sy->out) ||
             vec_last(sy->out).block)
@@ -1666,12 +1209,12 @@ static bool parser_close_call(parser_t *parser, shunt *sy)
         ast_type_to_string(vec_last(sy->out).out, ty, sizeof(ty));
         ast_unref(vec_last(sy->out).out);
         sy->out[fid] = syexp(ast_ctx(vec_last(sy->out).out),
-                             (ast_expression*)parser_const_string(parser, ty, false));
+                             (ast_expression*)fold_constgen_string(parser->fold, ty, false));
         vec_shrinkby(sy->out, 1);
         return true;
     }
-
     call = ast_call_new(sy->ops[vec_size(sy->ops)].ctx, fun);
+
     if (!call)
         return false;
 
@@ -1696,7 +1239,7 @@ static bool parser_close_call(parser_t *parser, shunt *sy)
         if ((fun->flags & AST_FLAG_VARIADIC) &&
             !(/*funval->cvq == CV_CONST && */ funval->hasvalue && funval->constval.vfunc->builtin))
         {
-            call->va_count = (ast_expression*)parser_const_float(parser, (double)paramcount);
+            call->va_count = (ast_expression*)fold_constgen_float(parser->fold, (qcfloat_t)paramcount);
         }
     }
 
@@ -1824,7 +1367,7 @@ static ast_expression* parse_vararg_do(parser_t *parser)
     ast_expression *idx, *out;
     ast_value      *typevar;
     ast_value      *funtype = parser->function->vtype;
-    lex_ctx         ctx     = parser_ctx(parser);
+    lex_ctx_t         ctx     = parser_ctx(parser);
 
     if (!parser->function->varargs) {
         parseerror(parser, "function has no variable argument list");
@@ -1906,8 +1449,7 @@ static ast_expression* parse_vararg(parser_t *parser)
 }
 
 /* not to be exposed */
-extern bool ftepp_predef_exists(const char *name);
-
+bool ftepp_predef_exists(const char *name);
 static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
 {
     if (OPTS_FLAG(TRANSLATABLE_STRINGS) &&
@@ -1927,7 +1469,7 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
             parseerror(parser, "expected a constant string in translatable-string extension");
             return false;
         }
-        val = parser_const_string(parser, parser_tokval(parser), true);
+        val = (ast_value*)fold_constgen_string(parser->fold, parser_tokval(parser), true);
         if (!val)
             return false;
         vec_push(sy->out, syexp(parser_ctx(parser), (ast_expression*)val));
@@ -1952,35 +1494,31 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
         return true;
     }
     else if (parser->tok == TOKEN_FLOATCONST) {
-        ast_value *val;
-        val = parser_const_float(parser, (parser_token(parser)->constval.f));
+        ast_expression *val = fold_constgen_float(parser->fold, (parser_token(parser)->constval.f));
         if (!val)
             return false;
-        vec_push(sy->out, syexp(parser_ctx(parser), (ast_expression*)val));
+        vec_push(sy->out, syexp(parser_ctx(parser), val));
         return true;
     }
     else if (parser->tok == TOKEN_INTCONST || parser->tok == TOKEN_CHARCONST) {
-        ast_value *val;
-        val = parser_const_float(parser, (double)(parser_token(parser)->constval.i));
+        ast_expression *val = fold_constgen_float(parser->fold, (qcfloat_t)(parser_token(parser)->constval.i));
         if (!val)
             return false;
-        vec_push(sy->out, syexp(parser_ctx(parser), (ast_expression*)val));
+        vec_push(sy->out, syexp(parser_ctx(parser), val));
         return true;
     }
     else if (parser->tok == TOKEN_STRINGCONST) {
-        ast_value *val;
-        val = parser_const_string(parser, parser_tokval(parser), false);
+        ast_expression *val = fold_constgen_string(parser->fold, parser_tokval(parser), false);
         if (!val)
             return false;
-        vec_push(sy->out, syexp(parser_ctx(parser), (ast_expression*)val));
+        vec_push(sy->out, syexp(parser_ctx(parser), val));
         return true;
     }
     else if (parser->tok == TOKEN_VECTORCONST) {
-        ast_value *val;
-        val = parser_const_vector(parser, parser_token(parser)->constval.v);
+        ast_expression *val = fold_constgen_vector(parser->fold, parser_token(parser)->constval.v);
         if (!val)
             return false;
-        vec_push(sy->out, syexp(parser_ctx(parser), (ast_expression*)val));
+        vec_push(sy->out, syexp(parser_ctx(parser), val));
         return true;
     }
     else if (parser->tok == TOKEN_IDENT)
@@ -1991,9 +1529,7 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
         /* a_vector.{x,y,z} */
         if (!vec_size(sy->ops) ||
             !vec_last(sy->ops).etype ||
-            operators[vec_last(sy->ops).etype-1].id != opid1('.') ||
-            (prev >= intrinsic_debug_typestring &&
-             prev <= intrinsic_debug_typestring))
+            operators[vec_last(sy->ops).etype-1].id != opid1('.'))
         {
             /* When adding more intrinsics, fix the above condition */
             prev = NULL;
@@ -2015,18 +1551,15 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
             }
         }
         if (!var && !strcmp(parser_tokval(parser), "__FUNC__"))
-            var = (ast_expression*)parser_const_string(parser, parser->function->name, false);
+            var = (ast_expression*)fold_constgen_string(parser->fold, parser->function->name, false);
         if (!var) {
-            /* intrinsics */
-            if (!strcmp(parser_tokval(parser), "__builtin_debug_typestring")) {
-                var = (ast_expression*)intrinsic_debug_typestring;
-            }
-            /* now we try for the real intrinsic hashtable. If the string
+            /*
+             * now we try for the real intrinsic hashtable. If the string
              * begins with __builtin, we simply skip past it, otherwise we
              * use the identifier as is.
              */
-            else if (!strncmp(parser_tokval(parser), "__builtin_", 10)) {
-                var = intrin_func(parser, parser_tokval(parser) + 10 /* skip __builtin */);
+            if (!strncmp(parser_tokval(parser), "__builtin_", 10)) {
+                var = intrin_func(parser->intrin, parser_tokval(parser));
             }
 
             if (!var) {
@@ -2315,7 +1848,7 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
                     {
                         char *newstr = NULL;
                         util_asprintf(&newstr, "%s%s", last->constval.vstring, parser_tokval(parser));
-                        vec_last(sy.out).out = (ast_expression*)parser_const_string(parser, newstr, false);
+                        vec_last(sy.out).out = (ast_expression*)fold_constgen_string(parser->fold, newstr, false);
                         mem_d(newstr);
                         concatenated = true;
                     }
@@ -2539,7 +2072,7 @@ static bool parse_if(parser_t *parser, ast_block *block, ast_expression **out)
     ast_expression *cond, *ontrue = NULL, *onfalse = NULL;
     bool ifnot = false;
 
-    lex_ctx ctx = parser_ctx(parser);
+    lex_ctx_t ctx = parser_ctx(parser);
 
     (void)block; /* not touching */
 
@@ -2678,7 +2211,7 @@ static bool parse_while_go(parser_t *parser, ast_block *block, ast_expression **
 
     bool ifnot = false;
 
-    lex_ctx ctx = parser_ctx(parser);
+    lex_ctx_t ctx = parser_ctx(parser);
 
     (void)block; /* not touching */
 
@@ -2779,7 +2312,7 @@ static bool parse_dowhile_go(parser_t *parser, ast_block *block, ast_expression 
 
     bool ifnot = false;
 
-    lex_ctx ctx = parser_ctx(parser);
+    lex_ctx_t ctx = parser_ctx(parser);
 
     (void)block; /* not touching */
 
@@ -2904,7 +2437,7 @@ static bool parse_for_go(parser_t *parser, ast_block *block, ast_expression **ou
 
     bool ifnot  = false;
 
-    lex_ctx ctx = parser_ctx(parser);
+    lex_ctx_t ctx = parser_ctx(parser);
 
     parser_enterblock(parser);
 
@@ -2970,7 +2503,7 @@ static bool parse_for_go(parser_t *parser, ast_block *block, ast_expression **ou
 
     /* parse the incrementor */
     if (parser->tok != ')') {
-        lex_ctx condctx = parser_ctx(parser);
+        lex_ctx_t condctx = parser_ctx(parser);
         increment = parse_expression_leave(parser, false, false, false);
         if (!increment)
             goto onerr;
@@ -3022,7 +2555,7 @@ static bool parse_return(parser_t *parser, ast_block *block, ast_expression **ou
     ast_value      *retval   = parser->function->return_value;
     ast_value      *expected = parser->function->vtype;
 
-    lex_ctx ctx = parser_ctx(parser);
+    lex_ctx_t ctx = parser_ctx(parser);
 
     (void)block; /* not touching */
 
@@ -3121,7 +2654,7 @@ static bool parse_break_continue(parser_t *parser, ast_block *block, ast_express
 {
     size_t       i;
     unsigned int levels = 0;
-    lex_ctx      ctx = parser_ctx(parser);
+    lex_ctx_t      ctx = parser_ctx(parser);
     const char **loops = (is_continue ? parser->continues : parser->breaks);
 
     (void)block; /* not touching */
@@ -3408,7 +2941,7 @@ static bool parse_switch_go(parser_t *parser, ast_block *block, ast_expression *
     bool noref, is_static;
     uint32_t qflags = 0;
 
-    lex_ctx ctx = parser_ctx(parser);
+    lex_ctx_t ctx = parser_ctx(parser);
 
     (void)block; /* not touching */
     (void)opval;
@@ -3920,7 +3453,7 @@ static bool parse_statement(parser_t *parser, ast_block *block, ast_expression *
     }
     else
     {
-        lex_ctx ctx = parser_ctx(parser);
+        lex_ctx_t ctx = parser_ctx(parser);
         ast_expression *exp = parse_expression(parser, false, false);
         if (!exp)
             return false;
@@ -3937,7 +3470,7 @@ static bool parse_enum(parser_t *parser)
 {
     bool        flag = false;
     bool        reverse = false;
-    qcfloat     num = 0;
+    qcfloat_t     num = 0;
     ast_value **values = NULL;
     ast_value  *var = NULL;
     ast_value  *asvalue;
@@ -4319,7 +3852,7 @@ static bool parse_function_body(parser_t *parser, ast_value *var)
     }
 
     if (has_frame_think) {
-        lex_ctx ctx;
+        lex_ctx_t ctx;
         ast_expression *self_frame;
         ast_expression *self_nextthink;
         ast_expression *self_think;
@@ -4334,7 +3867,7 @@ static bool parse_function_body(parser_t *parser, ast_value *var)
         self_think     = (ast_expression*)ast_entfield_new(ctx, gbl_self, fld_think);
 
         time_plus_1    = (ast_expression*)ast_binary_new(ctx, INSTR_ADD_F,
-                         gbl_time, (ast_expression*)parser_const_float(parser, 0.1));
+                         gbl_time, (ast_expression*)fold_constgen_float(parser->fold, 0.1f));
 
         if (!self_frame || !self_nextthink || !self_think || !time_plus_1) {
             if (self_frame)     ast_delete(self_frame);
@@ -4448,9 +3981,8 @@ static bool parse_function_body(parser_t *parser, ast_value *var)
             ast_block_delete(block);
             goto enderrfn;
         }
-        func->varargs = varargs;
-
-        func->fixedparams = parser_const_float(parser, vec_size(var->expression.params));
+        func->varargs     = varargs;
+        func->fixedparams = (ast_value*)fold_constgen_float(parser->fold, vec_size(var->expression.params));
     }
 
     parser->function = func;
@@ -4499,7 +4031,7 @@ static ast_expression *array_accessor_split(
     ast_ifthen *ifthen;
     ast_binary *cmp;
 
-    lex_ctx ctx = ast_ctx(array);
+    lex_ctx_t ctx = ast_ctx(array);
 
     if (!left || !right) {
         if (left)  ast_delete(left);
@@ -4509,7 +4041,7 @@ static ast_expression *array_accessor_split(
 
     cmp = ast_binary_new(ctx, INSTR_LT,
                          (ast_expression*)index,
-                         (ast_expression*)parser_const_float(parser, middle));
+                         (ast_expression*)fold_constgen_float(parser->fold, middle));
     if (!cmp) {
         ast_delete(left);
         ast_delete(right);
@@ -4529,7 +4061,7 @@ static ast_expression *array_accessor_split(
 
 static ast_expression *array_setter_node(parser_t *parser, ast_value *array, ast_value *index, ast_value *value, size_t from, size_t afterend)
 {
-    lex_ctx ctx = ast_ctx(array);
+    lex_ctx_t ctx = ast_ctx(array);
 
     if (from+1 == afterend) {
         /* set this value */
@@ -4542,7 +4074,7 @@ static ast_expression *array_setter_node(parser_t *parser, ast_value *array, ast
         if (value->expression.vtype == TYPE_FIELD && value->expression.next->vtype == TYPE_VECTOR)
             assignop = INSTR_STORE_V;
 
-        subscript = ast_array_index_new(ctx, (ast_expression*)array, (ast_expression*)parser_const_float(parser, from));
+        subscript = ast_array_index_new(ctx, (ast_expression*)array, (ast_expression*)fold_constgen_float(parser->fold, from));
         if (!subscript)
             return NULL;
 
@@ -4594,7 +4126,7 @@ static ast_expression *array_field_setter_node(
     size_t     from,
     size_t     afterend)
 {
-    lex_ctx ctx = ast_ctx(array);
+    lex_ctx_t ctx = ast_ctx(array);
 
     if (from+1 == afterend) {
         /* set this value */
@@ -4608,7 +4140,7 @@ static ast_expression *array_field_setter_node(
         if (value->expression.vtype == TYPE_FIELD && value->expression.next->vtype == TYPE_VECTOR)
             assignop = INSTR_STOREP_V;
 
-        subscript = ast_array_index_new(ctx, (ast_expression*)array, (ast_expression*)parser_const_float(parser, from));
+        subscript = ast_array_index_new(ctx, (ast_expression*)array, (ast_expression*)fold_constgen_float(parser->fold, from));
         if (!subscript)
             return NULL;
 
@@ -4665,13 +4197,13 @@ static ast_expression *array_field_setter_node(
 
 static ast_expression *array_getter_node(parser_t *parser, ast_value *array, ast_value *index, size_t from, size_t afterend)
 {
-    lex_ctx ctx = ast_ctx(array);
+    lex_ctx_t ctx = ast_ctx(array);
 
     if (from+1 == afterend) {
         ast_return      *ret;
         ast_array_index *subscript;
 
-        subscript = ast_array_index_new(ctx, (ast_expression*)array, (ast_expression*)parser_const_float(parser, from));
+        subscript = ast_array_index_new(ctx, (ast_expression*)array, (ast_expression*)fold_constgen_float(parser->fold, from));
         if (!subscript)
             return NULL;
 
@@ -4901,7 +4433,7 @@ static bool parser_create_array_getter(parser_t *parser, ast_value *array, const
 static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_value *cached_typedef);
 static ast_value *parse_parameter_list(parser_t *parser, ast_value *var)
 {
-    lex_ctx     ctx;
+    lex_ctx_t     ctx;
     size_t      i;
     ast_value **params;
     ast_value  *param;
@@ -5028,7 +4560,7 @@ static ast_value *parse_arraysize(parser_t *parser, ast_value *var)
 {
     ast_expression *cexp;
     ast_value      *cval, *tmp;
-    lex_ctx ctx;
+    lex_ctx_t ctx;
 
     ctx = parser_ctx(parser);
 
@@ -5107,7 +4639,7 @@ static ast_value *parse_arraysize(parser_t *parser, ast_value *var)
 static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_value *cached_typedef)
 {
     ast_value *var, *tmp;
-    lex_ctx    ctx;
+    lex_ctx_t    ctx;
 
     const char *name = NULL;
     bool        isfield  = false;
@@ -5898,7 +5430,7 @@ skipvar:
                         parseerror(parser, "error parsing break definition");
                         break;
                     }
-                    (void)!!parsewarning(parser, WARN_BREAKDEF, "break definition ignored (suggest removing it)");
+                    (void)!parsewarning(parser, WARN_BREAKDEF, "break definition ignored (suggest removing it)");
                 } else {
                     parseerror(parser, "missing semicolon or initializer, got: `%s`", parser_tokval(parser));
                     break;
@@ -6278,7 +5810,7 @@ static void generate_checksum(parser_t *parser, ir_builder *ir)
 parser_t *parser_create()
 {
     parser_t *parser;
-    lex_ctx empty_ctx;
+    lex_ctx_t empty_ctx;
     size_t i;
 
     parser = (parser_t*)mem_a(sizeof(parser_t));
@@ -6305,9 +5837,6 @@ parser_t *parser_create()
     vec_push(parser->_blocktypedefs, 0);
 
     parser->aliases = util_htnew(PARSER_HT_SIZE);
-
-    parser->ht_imm_string = util_htnew(512);
-    parser->ht_imm_string_dotranslate = util_htnew(512);
 
     /* corrector */
     vec_push(parser->correct_variables, correct_trie_new());
@@ -6337,6 +5866,8 @@ parser_t *parser_create()
         parser->reserved_version = NULL;
     }
 
+    parser->fold   = fold_init  (parser);
+    parser->intrin = intrin_init(parser);
     return parser;
 }
 
@@ -6406,15 +5937,6 @@ static void parser_remove_ast(parser_t *parser)
     for (i = 0; i < vec_size(parser->functions); ++i) {
         ast_delete(parser->functions[i]);
     }
-    for (i = 0; i < vec_size(parser->imm_vector); ++i) {
-        ast_delete(parser->imm_vector[i]);
-    }
-    for (i = 0; i < vec_size(parser->imm_string); ++i) {
-        ast_delete(parser->imm_string[i]);
-    }
-    for (i = 0; i < vec_size(parser->imm_float); ++i) {
-        ast_delete(parser->imm_float[i]);
-    }
     for (i = 0; i < vec_size(parser->fields); ++i) {
         ast_delete(parser->fields[i]);
     }
@@ -6423,11 +5945,6 @@ static void parser_remove_ast(parser_t *parser)
     }
     vec_free(parser->accessors);
     vec_free(parser->functions);
-    vec_free(parser->imm_vector);
-    vec_free(parser->imm_string);
-    util_htdel(parser->ht_imm_string_dotranslate);
-    util_htdel(parser->ht_imm_string);
-    vec_free(parser->imm_float);
     vec_free(parser->globals);
     vec_free(parser->fields);
 
@@ -6464,12 +5981,13 @@ static void parser_remove_ast(parser_t *parser)
     ast_value_delete(parser->const_vec[0]);
     ast_value_delete(parser->const_vec[1]);
     ast_value_delete(parser->const_vec[2]);
-    
+
     if (parser->reserved_version)
         ast_value_delete(parser->reserved_version);
 
     util_htdel(parser->aliases);
-    intrin_intrinsics_destroy(parser);
+    fold_cleanup(parser->fold);
+    intrin_cleanup(parser->intrin);
 }
 
 void parser_cleanup(parser_t *parser)
@@ -6542,6 +6060,7 @@ static bool function_finalize_all_threaded(ast_function **list, size_t count)
     return !failure;
 }
 
+bool function_finalize_all(ast_function **list, size_t count);
 bool function_finalize_all(ast_function **list, size_t count)
 {
     size_t i;
@@ -6640,27 +6159,9 @@ bool parser_finish(parser_t *parser, const char *output)
         }
     }
     /* Now we can generate immediates */
-    for (i = 0; i < vec_size(parser->imm_float); ++i) {
-        if (!ast_global_codegen(parser->imm_float[i], ir, false)) {
-            con_out("failed to generate global %s\n", parser->imm_float[i]->name);
-            ir_builder_delete(ir);
-            return false;
-        }
-    }
-    for (i = 0; i < vec_size(parser->imm_string); ++i) {
-        if (!ast_global_codegen(parser->imm_string[i], ir, false)) {
-            con_out("failed to generate global %s\n", parser->imm_string[i]->name);
-            ir_builder_delete(ir);
-            return false;
-        }
-    }
-    for (i = 0; i < vec_size(parser->imm_vector); ++i) {
-        if (!ast_global_codegen(parser->imm_vector[i], ir, false)) {
-            con_out("failed to generate global %s\n", parser->imm_vector[i]->name);
-            ir_builder_delete(ir);
-            return false;
-        }
-    }
+    if (!fold_generate(parser->fold, ir))
+        return false;
+
     for (i = 0; i < vec_size(parser->globals); ++i) {
         ast_value *asvalue;
         if (!ast_istype(parser->globals[i], ast_value))

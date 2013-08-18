@@ -26,7 +26,7 @@
 
 /*
  * We could use the old method of casting to uintptr_t then to void*
- * or qcint; however, it's incredibly unsafe for two reasons.
+ * or qcint_t; however, it's incredibly unsafe for two reasons.
  * 1) The compilers aliasing optimization can legally make it unstable
  *    (it's undefined behaviour).
  *
@@ -37,14 +37,14 @@
  */
 typedef union {
     void   *enter;
-    qcint   leave;
+    qcint_t   leave;
 } code_hash_entry_t;
 
 /* Some sanity macros */
 #define CODE_HASH_ENTER(ENTRY) ((ENTRY).enter)
 #define CODE_HASH_LEAVE(ENTRY) ((ENTRY).leave)
 
-void code_push_statement(code_t *code, prog_section_statement *stmt, int linenum)
+void code_push_statement(code_t *code, prog_section_statement_t *stmt, int linenum)
 {
     vec_push(code->statements, *stmt);
     vec_push(code->linenums,   linenum);
@@ -57,9 +57,9 @@ void code_pop_statement(code_t *code)
 }
 
 code_t *code_init() {
-    static prog_section_function  empty_function  = {0,0,0,0,0,0,0,{0,0,0,0,0,0,0,0}};
-    static prog_section_statement empty_statement = {0,{0},{0},{0}};
-    static prog_section_def       empty_def       = {0, 0, 0};
+    static prog_section_function_t  empty_function  = {0,0,0,0,0,0,0,{0,0,0,0,0,0,0,0}};
+    static prog_section_statement_t empty_statement = {0,{0},{0},{0}};
+    static prog_section_def_t       empty_def       = {0, 0, 0};
 
     code_t *code       = (code_t*)mem_a(sizeof(code_t));
     int     i          = 0;
@@ -115,31 +115,58 @@ uint32_t code_genstring(code_t *code, const char *str) {
         return CODE_HASH_LEAVE(existing);
 
     CODE_HASH_LEAVE(existing) = vec_size(code->chars);
-    vec_upload(code->chars, str, strlen(str)+1);
+    vec_append(code->chars, strlen(str)+1, str);
 
     util_htseth(code->string_cache, str, hash, CODE_HASH_ENTER(existing));
     return CODE_HASH_LEAVE(existing);
 }
 
-qcint code_alloc_field (code_t *code, size_t qcsize)
+qcint_t code_alloc_field (code_t *code, size_t qcsize)
 {
-    qcint pos = (qcint)code->entfields;
+    qcint_t pos = (qcint_t)code->entfields;
     code->entfields += qcsize;
     return pos;
 }
 
-static void code_create_header(code_t *code, prog_header *code_header) {
-    code_header->statements.offset = sizeof(prog_header);
+static size_t code_size_generic(code_t *code, prog_header_t *code_header, bool lno) {
+    size_t size = 0;
+    if (lno) {
+        size += 4;  /* LNOF */
+        size += sizeof(uint32_t); /* version */
+        size += sizeof(code_header->defs.length);
+        size += sizeof(code_header->globals.length);
+        size += sizeof(code_header->fields.length);
+        size += sizeof(code_header->statements.length);
+        size += sizeof(code->linenums[0]) * vec_size(code->linenums);
+    } else {
+        size += sizeof(prog_header_t);
+        size += sizeof(prog_section_statement_t) * vec_size(code->statements);
+        size += sizeof(prog_section_def_t)       * vec_size(code->defs);
+        size += sizeof(prog_section_field_t)     * vec_size(code->fields);
+        size += sizeof(prog_section_function_t)  * vec_size(code->functions);
+        size += sizeof(int32_t)                  * vec_size(code->globals);
+        size += 1                                * vec_size(code->chars);
+    }
+    return size;
+}
+
+#define code_size_binary(C, H) code_size_generic((C), (H), false)
+#define code_size_debug(C, H)  code_size_generic((C), (H), true)
+
+static void code_create_header(code_t *code, prog_header_t *code_header, const char *filename, const char *lnofile) {
+    size_t i;
+
+    code_header->statements.offset = sizeof(prog_header_t);
     code_header->statements.length = vec_size(code->statements);
-    code_header->defs.offset       = code_header->statements.offset + (sizeof(prog_section_statement) * vec_size(code->statements));
+    code_header->defs.offset       = code_header->statements.offset + (sizeof(prog_section_statement_t) * vec_size(code->statements));
     code_header->defs.length       = vec_size(code->defs);
-    code_header->fields.offset     = code_header->defs.offset       + (sizeof(prog_section_def)       * vec_size(code->defs));
+    code_header->fields.offset     = code_header->defs.offset       + (sizeof(prog_section_def_t)       * vec_size(code->defs));
     code_header->fields.length     = vec_size(code->fields);
-    code_header->functions.offset  = code_header->fields.offset     + (sizeof(prog_section_field)     * vec_size(code->fields));
+    code_header->functions.offset  = code_header->fields.offset     + (sizeof(prog_section_field_t)     * vec_size(code->fields));
     code_header->functions.length  = vec_size(code->functions);
-    code_header->globals.offset    = code_header->functions.offset  + (sizeof(prog_section_function)  * vec_size(code->functions));
+    code_header->globals.offset    = code_header->functions.offset  + (sizeof(prog_section_function_t)  * vec_size(code->functions));
     code_header->globals.length    = vec_size(code->globals);
-    code_header->strings.offset    = code_header->globals.offset    + (sizeof(int32_t)                * vec_size(code->globals));
+    code_header->strings.offset    = code_header->globals.offset    + (sizeof(int32_t)                  * vec_size(code->globals));
     code_header->strings.length    = vec_size(code->chars);
     code_header->version           = 6;
     code_header->skip              = 0;
@@ -174,11 +201,54 @@ static void code_create_header(code_t *code, prog_header *code_header) {
      * These are not part of the header but we ensure LE format here to save on duplicated
      * code.
      */
-    util_endianswap(code->statements, vec_size(code->statements), sizeof(prog_section_statement));
-    util_endianswap(code->defs,       vec_size(code->defs),       sizeof(prog_section_def));
-    util_endianswap(code->fields,     vec_size(code->fields),     sizeof(prog_section_field));
-    util_endianswap(code->functions,  vec_size(code->functions),  sizeof(prog_section_function));
+    util_endianswap(code->statements, vec_size(code->statements), sizeof(prog_section_statement_t));
+    util_endianswap(code->defs,       vec_size(code->defs),       sizeof(prog_section_def_t));
+    util_endianswap(code->fields,     vec_size(code->fields),     sizeof(prog_section_field_t));
+    util_endianswap(code->functions,  vec_size(code->functions),  sizeof(prog_section_function_t));
     util_endianswap(code->globals,    vec_size(code->globals),    sizeof(int32_t));
+
+
+    if (!OPTS_OPTION_BOOL(OPTION_QUIET)) {
+        if (lnofile)
+            con_out("writing '%s' and '%s'...\n", filename, lnofile);
+        else
+            con_out("writing '%s'\n", filename);
+    }
+
+    if (!OPTS_OPTION_BOOL(OPTION_QUIET) &&
+        !OPTS_OPTION_BOOL(OPTION_PP_ONLY))
+    {
+        char buffer[1024];
+        con_out("\nOptimizations:\n");
+        for (i = 0; i < COUNT_OPTIMIZATIONS; ++i) {
+            if (opts_optimizationcount[i]) {
+                util_optimizationtostr(opts_opt_list[i].name, buffer, sizeof(buffer));
+                con_out(
+                    "    %s: %u\n",
+                    buffer,
+                    (unsigned int)opts_optimizationcount[i]
+                );
+            }
+        }
+    }
+}
+
+static void code_stats(const char *filename, const char *lnofile, code_t *code, prog_header_t *code_header) {
+    if (OPTS_OPTION_BOOL(OPTION_QUIET) ||
+        OPTS_OPTION_BOOL(OPTION_PP_ONLY))
+            return;
+
+    con_out("\nFile statistics:\n");
+    con_out("    dat:\n");
+    con_out("        name: %s\n",         filename);
+    con_out("        size: %u (bytes)\n", code_size_binary(code, code_header));
+    con_out("        crc:  0x%04X\n",     code->crc);
+
+    if (lnofile) {
+        con_out("    lno:\n");
+        con_out("        name: %s\n",  lnofile);
+        con_out("        size: %u (bytes)\n",  code_size_debug(code, code_header));
+    }
 }
 
 /*
@@ -186,14 +256,15 @@ static void code_create_header(code_t *code, prog_header *code_header) {
  * directly out to allocated memory. Which is actually very useful for the future library support
  * we're going to add.
  */
-bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t **lnomem, size_t *sizelno) {
-    prog_header code_header;
-    uint32_t    offset  = 0;
+#if 0
+static bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t **lnomem, size_t *sizelno) GMQCC_UNUSED {
+    prog_header_t code_header;
+    uint32_t      offset  = 0;
 
     if (!datmem)
         return false;
 
-    code_create_header(code, &code_header);
+    code_create_header(code, &code_header, "<<memory>>", "<<memory>>");
 
     #define WRITE_CHUNK(C,X,S)                                     \
         do {                                                       \
@@ -205,15 +276,8 @@ bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t 
     if (lnomem) {
         uint32_t version = 1;
 
-        *sizelno += 4;               /* LNOF */
-        *sizelno += sizeof(version);
-        *sizelno += sizeof(code_header.defs.length);
-        *sizelno += sizeof(code_header.globals.length);
-        *sizelno += sizeof(code_header.fields.length);
-        *sizelno += sizeof(code_header.statements.length);
-        *sizelno += sizeof(code->linenums[0]) * vec_size(code->linenums);
-
-        *lnomem   = (uint8_t*)mem_a(*sizelno);
+        *sizelno = code_size_debug(code, &code_header);
+        *lnomem  = (uint8_t*)mem_a(*sizelno);
 
         WRITE_CHUNK(lnomem, "LNOF",                         4);
         WRITE_CHUNK(lnomem, &version,                       sizeof(version));
@@ -232,25 +296,16 @@ bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t 
     }
 
     /* Write out the dat */
-    *sizedat += sizeof(prog_header);
-    *sizedat += sizeof(prog_section_statement) * vec_size(code->statements);
-    *sizedat += sizeof(prog_section_def)       * vec_size(code->defs);
-    *sizedat += sizeof(prog_section_field)     * vec_size(code->fields);
-    *sizedat += sizeof(prog_section_function)  * vec_size(code->functions);
-    *sizedat += sizeof(int32_t)                * vec_size(code->globals);
-    *sizedat += 1                              * vec_size(code->chars);
+    *sizedat = code_size_binary(code, &code_header);
+    *datmem  = (uint8_t*)mem_a(*sizedat);
 
-    *datmem = (uint8_t*)mem_a(*sizedat);
-
-    WRITE_CHUNK(datmem, &code_header,     sizeof(prog_header));
-    WRITE_CHUNK(datmem, code->statements, sizeof(prog_section_statement) * vec_size(code->statements));
-    WRITE_CHUNK(datmem, code->defs,       sizeof(prog_section_def)       * vec_size(code->defs));
-    WRITE_CHUNK(datmem, code->fields,     sizeof(prog_section_field)     * vec_size(code->fields));
-    WRITE_CHUNK(datmem, code->functions,  sizeof(prog_section_function)  * vec_size(code->functions));
-    WRITE_CHUNK(datmem, code->globals,    sizeof(int32_t)                * vec_size(code->globals));
-    WRITE_CHUNK(datmem, code->chars,      1                              * vec_size(code->chars));
-
-    #undef WRITE_CHUNK
+    WRITE_CHUNK(datmem, &code_header,     sizeof(prog_header_t));
+    WRITE_CHUNK(datmem, code->statements, sizeof(prog_section_statement_t) * vec_size(code->statements));
+    WRITE_CHUNK(datmem, code->defs,       sizeof(prog_section_def_t)       * vec_size(code->defs));
+    WRITE_CHUNK(datmem, code->fields,     sizeof(prog_section_field_t)     * vec_size(code->fields));
+    WRITE_CHUNK(datmem, code->functions,  sizeof(prog_section_function_t)  * vec_size(code->functions));
+    WRITE_CHUNK(datmem, code->globals,    sizeof(int32_t)                  * vec_size(code->globals));
+    WRITE_CHUNK(datmem, code->chars,      1                                * vec_size(code->chars));
 
     vec_free(code->statements);
     vec_free(code->linenums);
@@ -262,16 +317,18 @@ bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, uint8_t 
 
     util_htdel(code->string_cache);
     mem_d(code);
-
+    code_stats("<<memory>>", (lnomem) ? "<<memory>>" : NULL, code, &code_header);
     return true;
 }
+#endif /*!#if 0 reenable when ready to be used */
+#undef WRITE_CHUNK
 
 bool code_write(code_t *code, const char *filename, const char *lnofile) {
-    prog_header  code_header;
-    FILE        *fp           = NULL;
-    size_t       it           = 2;
+    prog_header_t  code_header;
+    FILE          *fp           = NULL;
+    size_t         it           = 2;
 
-    code_create_header(code, &code_header);
+    code_create_header(code, &code_header, filename, lnofile);
 
     if (lnofile) {
         uint32_t version = 1;
@@ -303,13 +360,13 @@ bool code_write(code_t *code, const char *filename, const char *lnofile) {
     if (!fp)
         return false;
 
-    if (1                          != fs_file_write(&code_header,     sizeof(prog_header)           , 1                         , fp) ||
-        vec_size(code->statements) != fs_file_write(code->statements, sizeof(prog_section_statement), vec_size(code->statements), fp) ||
-        vec_size(code->defs)       != fs_file_write(code->defs,       sizeof(prog_section_def)      , vec_size(code->defs)      , fp) ||
-        vec_size(code->fields)     != fs_file_write(code->fields,     sizeof(prog_section_field)    , vec_size(code->fields)    , fp) ||
-        vec_size(code->functions)  != fs_file_write(code->functions,  sizeof(prog_section_function) , vec_size(code->functions) , fp) ||
-        vec_size(code->globals)    != fs_file_write(code->globals,    sizeof(int32_t)               , vec_size(code->globals)   , fp) ||
-        vec_size(code->chars)      != fs_file_write(code->chars,      1                             , vec_size(code->chars)     , fp))
+    if (1                          != fs_file_write(&code_header,     sizeof(prog_header_t)           , 1                         , fp) ||
+        vec_size(code->statements) != fs_file_write(code->statements, sizeof(prog_section_statement_t), vec_size(code->statements), fp) ||
+        vec_size(code->defs)       != fs_file_write(code->defs,       sizeof(prog_section_def_t)      , vec_size(code->defs)      , fp) ||
+        vec_size(code->fields)     != fs_file_write(code->fields,     sizeof(prog_section_field_t)    , vec_size(code->fields)    , fp) ||
+        vec_size(code->functions)  != fs_file_write(code->functions,  sizeof(prog_section_function_t) , vec_size(code->functions) , fp) ||
+        vec_size(code->globals)    != fs_file_write(code->globals,    sizeof(int32_t)                 , vec_size(code->globals)   , fp) ||
+        vec_size(code->chars)      != fs_file_write(code->chars,      1                               , vec_size(code->chars)     , fp))
     {
         fs_file_close(fp);
         return false;
@@ -355,7 +412,7 @@ bool code_write(code_t *code, const char *filename, const char *lnofile) {
             for (;;) {
                 if (code->statements[j].opcode != INSTR_DONE)
                     util_debug("GEN", "        %-12s {% 5i,% 5i,% 5i}\n",
-                        asm_instr[code->statements[j].opcode].m,
+                        util_instr_str[code->statements[j].opcode],
                         code->statements[j].o1.s1,
                         code->statements[j].o2.s1,
                         code->statements[j].o3.s1
@@ -370,6 +427,7 @@ bool code_write(code_t *code, const char *filename, const char *lnofile) {
     }
 
     fs_file_close(fp);
+    code_stats(filename, lnofile, code, &code_header);
     return true;
 }
 

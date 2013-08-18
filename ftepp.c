@@ -41,7 +41,7 @@ typedef struct {
     char *value;
     /* a copy from the lexer */
     union {
-        vector v;
+        vec3_t v;
         int    i;
         double f;
         int    t; /* type */
@@ -49,7 +49,7 @@ typedef struct {
 } pptoken;
 
 typedef struct {
-    lex_ctx ctx;
+    lex_ctx_t ctx;
 
     char   *name;
     char  **params;
@@ -183,6 +183,9 @@ static char *ftepp_predef_timestamp(lex_file *context) {
     char       *find;
     char       *value;
     size_t      size;
+#ifdef _MSC_VER
+	char        buffer[64];
+#endif
     if (stat(context->name, &finfo))
         return util_strdup("\"<failed to determine timestamp>\"");
 
@@ -190,7 +193,14 @@ static char *ftepp_predef_timestamp(lex_file *context) {
      * ctime and its fucking annoying newline char, no worries, we're
      * professionals here.
      */
+
+#ifndef _MSC_VER
     find  = ctime(&finfo.st_mtime);
+#else
+	ctime_s(buffer, sizeof(buffer), &finfo.st_mtime);
+	find = buffer;
+#endif
+
     value = (char*)mem_a(strlen(find) + 1);
     memcpy(&value[1], find, (size = strlen(find)) - 1);
 
@@ -217,36 +227,37 @@ static const ftepp_predef_t ftepp_predefs[] = {
     { "__TIME_STAMP__",   &ftepp_predef_timestamp   }
 };
 
-static GMQCC_INLINE int ftepp_predef_index(const char *name) {
+static GMQCC_INLINE size_t ftepp_predef_index(const char *name) {
     /* no hashtable here, we simply check for one to exist the naive way */
-    int i;
-    for(i = 0; i < (int)(sizeof(ftepp_predefs)/sizeof(*ftepp_predefs)); i++)
-        if (!strcmp(ftepp_predefs[i].name, name))
+    size_t i;
+    for(i = 1; i < GMQCC_ARRAY_COUNT(ftepp_predefs) + 1; i++)
+        if (!strcmp(ftepp_predefs[i-1].name, name))
             return i;
-    return -1;
+    return 0;
 }
 
+bool ftepp_predef_exists(const char *name);
 bool ftepp_predef_exists(const char *name) {
-    return ftepp_predef_index(name) != -1;
+    return ftepp_predef_index(name) != 0;
 }
 
 /* singleton because we're allowed */
 static GMQCC_INLINE char *(*ftepp_predef(const char *name))(lex_file *context) {
-    int i = ftepp_predef_index(name);
-    return (i != -1) ? ftepp_predefs[i].func : NULL;
+    size_t i = ftepp_predef_index(name);
+    return (i != 0) ? ftepp_predefs[i-1].func : NULL;
 }
 
 #define ftepp_tokval(f) ((f)->lex->tok.value)
 #define ftepp_ctx(f)    ((f)->lex->tok.ctx)
 
-static void ftepp_errorat(ftepp_t *ftepp, lex_ctx ctx, const char *fmt, ...)
+static void ftepp_errorat(ftepp_t *ftepp, lex_ctx_t ctx, const char *fmt, ...)
 {
     va_list ap;
 
     ftepp->errors++;
 
     va_start(ap, fmt);
-    con_cvprintmsg((void*)&ctx, LVL_ERROR, "error", fmt, ap);
+    con_cvprintmsg(ctx, LVL_ERROR, "error", fmt, ap);
     va_end(ap);
 }
 
@@ -257,7 +268,7 @@ static void ftepp_error(ftepp_t *ftepp, const char *fmt, ...)
     ftepp->errors++;
 
     va_start(ap, fmt);
-    con_cvprintmsg((void*)&ftepp->lex->tok.ctx, LVL_ERROR, "error", fmt, ap);
+    con_cvprintmsg(ftepp->lex->tok.ctx, LVL_ERROR, "error", fmt, ap);
     va_end(ap);
 }
 
@@ -293,7 +304,7 @@ static GMQCC_INLINE void pptoken_delete(pptoken *self)
     mem_d(self);
 }
 
-static ppmacro *ppmacro_new(lex_ctx ctx, const char *name)
+static ppmacro *ppmacro_new(lex_ctx_t ctx, const char *name)
 {
     ppmacro *macro = (ppmacro*)mem_a(sizeof(ppmacro));
 
@@ -1340,10 +1351,10 @@ static bool ftepp_directive_warning(ftepp_t *ftepp) {
     /* handle the odd non string constant case so it works like C */
     if (ftepp->token != TOKEN_STRINGCONST) {
         bool  store   = false;
-        vec_upload(message, "#warning", 8);
+        vec_append(message, 8, "#warning");
         ftepp_next(ftepp);
         while (ftepp->token != TOKEN_EOL) {
-            vec_upload(message, ftepp_tokval(ftepp), strlen(ftepp_tokval(ftepp)));
+            vec_append(message, strlen(ftepp_tokval(ftepp)), ftepp_tokval(ftepp));
             ftepp_next(ftepp);
         }
         vec_push(message, '\0');
@@ -1370,10 +1381,10 @@ static void ftepp_directive_error(ftepp_t *ftepp) {
 
     /* handle the odd non string constant case so it works like C */
     if (ftepp->token != TOKEN_STRINGCONST) {
-        vec_upload(message, "#error", 6);
+        vec_append(message, 6, "#error");
         ftepp_next(ftepp);
         while (ftepp->token != TOKEN_EOL) {
-            vec_upload(message, ftepp_tokval(ftepp), strlen(ftepp_tokval(ftepp)));
+            vec_append(message, strlen(ftepp_tokval(ftepp)), ftepp_tokval(ftepp));
             ftepp_next(ftepp);
         }
         vec_push(message, '\0');
@@ -1398,15 +1409,15 @@ static void ftepp_directive_message(ftepp_t *ftepp) {
 
     /* handle the odd non string constant case so it works like C */
     if (ftepp->token != TOKEN_STRINGCONST) {
-        vec_upload(message, "#message", 8);
+        vec_append(message, 8, "#message");
         ftepp_next(ftepp);
         while (ftepp->token != TOKEN_EOL) {
-            vec_upload(message, ftepp_tokval(ftepp), strlen(ftepp_tokval(ftepp)));
+            vec_append(message, strlen(ftepp_tokval(ftepp)), ftepp_tokval(ftepp));
             ftepp_next(ftepp);
         }
         vec_push(message, '\0');
         if (ftepp->output_on)
-            con_cprintmsg(&ftepp->lex->tok.ctx, LVL_MSG, "message", message);
+            con_cprintmsg(ftepp->lex->tok.ctx, LVL_MSG, "message", message);
         vec_free(message);
         return;
     }
@@ -1415,7 +1426,7 @@ static void ftepp_directive_message(ftepp_t *ftepp) {
         return;
 
     unescape     (ftepp_tokval(ftepp), ftepp_tokval(ftepp));
-    con_cprintmsg(&ftepp->lex->tok.ctx, LVL_MSG, "message",  ftepp_tokval(ftepp));
+    con_cprintmsg(ftepp->lex->tok.ctx, LVL_MSG, "message",  ftepp_tokval(ftepp));
 }
 
 /**
@@ -1427,7 +1438,7 @@ static bool ftepp_include(ftepp_t *ftepp)
 {
     lex_file *old_lexer = ftepp->lex;
     lex_file *inlex;
-    lex_ctx  ctx;
+    lex_ctx_t ctx;
     char     lineno[128];
     char     *filename;
     char     *old_includename;
@@ -1517,7 +1528,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
     ppcondition cond;
     ppcondition *pc;
 
-    lex_ctx ctx = ftepp_ctx(ftepp);
+    lex_ctx_t ctx = ftepp_ctx(ftepp);
 
     if (!ftepp_skipspace(ftepp))
         return false;
@@ -1808,10 +1819,10 @@ void ftepp_add_macro(ftepp_t *ftepp, const char *name, const char *value) {
         return;
     }
 
-    vec_upload(create, "#define ", 8);
-    vec_upload(create, name,  strlen(name));
+    vec_append(create, 8,           "#define ");
+    vec_append(create, strlen(name), name);
     vec_push  (create, ' ');
-    vec_upload(create, value, strlen(value));
+    vec_append(create, strlen(value), value);
     vec_push  (create, 0);
 
     ftepp_preprocess_string(ftepp, "__builtin__", create);
@@ -1878,7 +1889,7 @@ ftepp_t *ftepp_create()
 void ftepp_add_define(ftepp_t *ftepp, const char *source, const char *name)
 {
     ppmacro *macro;
-    lex_ctx ctx = { "__builtin__", 0, 0 };
+    lex_ctx_t ctx = { "__builtin__", 0, 0 };
     ctx.file = source;
     macro = ppmacro_new(ctx, name);
     /*vec_push(ftepp->macros, macro);*/

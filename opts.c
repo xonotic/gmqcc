@@ -26,8 +26,36 @@
 
 #include "gmqcc.h"
 
+const unsigned int opts_opt_oflag[COUNT_OPTIMIZATIONS+1] = {
+# define GMQCC_TYPE_OPTIMIZATIONS
+# define GMQCC_DEFINE_FLAG(NAME, MIN_O) MIN_O,
+#  include "opts.def"
+    0
+};
+
+const opts_flag_def_t opts_opt_list[COUNT_OPTIMIZATIONS+1] = {
+# define GMQCC_TYPE_OPTIMIZATIONS
+# define GMQCC_DEFINE_FLAG(NAME, MIN_O) { #NAME, LONGBIT(OPTIM_##NAME) },
+#  include "opts.def"
+    { NULL, LONGBIT(0) }
+};
+
+const opts_flag_def_t opts_warn_list[COUNT_WARNINGS+1] = {
+# define GMQCC_TYPE_WARNS
+# define GMQCC_DEFINE_FLAG(X) { #X, LONGBIT(WARN_##X) },
+#  include "opts.def"
+    { NULL, LONGBIT(0) }
+};
+
+const opts_flag_def_t opts_flag_list[COUNT_FLAGS+1] = {
+# define GMQCC_TYPE_FLAGS
+# define GMQCC_DEFINE_FLAG(X) { #X, LONGBIT(X) },
+#  include "opts.def"
+    { NULL, LONGBIT(0) }
+};
+
 unsigned int opts_optimizationcount[COUNT_OPTIMIZATIONS];
-opts_cmd_t   opts; /* command lien options */
+opts_cmd_t   opts; /* command line options */
 
 static void opts_setdefault(void) {
     memset(&opts, 0, sizeof(opts_cmd_t));
@@ -105,7 +133,7 @@ void opts_init(const char *output, int standard, size_t arraysize) {
     OPTS_OPTION_U32(OPTION_J)              = 2;
 }
 
-static bool opts_setflag_all(const char *name, bool on, uint32_t *flags, const opts_flag_def *list, size_t listsize) {
+static bool opts_setflag_all(const char *name, bool on, uint32_t *flags, const opts_flag_def_t *list, size_t listsize) {
     size_t i;
 
     for (i = 0; i < listsize; ++i) {
@@ -321,16 +349,16 @@ static char *opts_ini_load(const char *section, const char *name, const char *va
             strcmp(section, "warnings")      &&
             strcmp(section, "optimizations"))
         {
-            vec_upload(error, "invalid section `", 17);
-            vec_upload(error, section, strlen(section));
+            vec_append(error, 17,             "invalid section `");
+            vec_append(error, strlen(section), section);
             vec_push  (error, '`');
             vec_push  (error, '\0');
         } else {
-            vec_upload(error, "invalid variable `", 18);
-            vec_upload(error, name, strlen(name));
+            vec_append(error, 18,             "invalid variable `");
+            vec_append(error, strlen(name), name);
             vec_push  (error, '`');
-            vec_upload(error, " in section: `", 14);
-            vec_upload(error, section, strlen(section));
+            vec_append(error, 14,              " in section: `");
+            vec_append(error, strlen(section), section);
             vec_push  (error, '`');
             vec_push  (error, '\0');
         }
@@ -351,7 +379,6 @@ void opts_ini_init(const char *file) {
     char       *error = NULL;
     size_t     line;
     FILE       *ini;
-
 
     if (!file) {
         /* try ini */
