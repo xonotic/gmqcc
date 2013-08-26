@@ -628,12 +628,19 @@ static bool ir_function_pass_peephole(ir_function *self)
                 if (!instr_is_operation(oper->opcode))
                     continue;
 
+                /* Old engine's mul for vector+float cannot deal with aliased inputs. */
                 if (OPTS_FLAG(LEGACY_VECTOR_MATHS)) {
                     if (oper->opcode == INSTR_MUL_VF && oper->_ops[2]->memberof == oper->_ops[1])
                         continue;
                     if (oper->opcode == INSTR_MUL_FV && oper->_ops[1]->memberof == oper->_ops[2])
                         continue;
                 }
+
+                /* Emulated bitand/bitor for vector+float cannot deal with aliased inputs. */
+                if (oper->opcode == VINSTR_BITAND_VF && oper->_ops[2]->memberof == oper->_ops[1])
+                    continue;
+                if (oper->opcode == VINSTR_BITOR_VF && oper->_ops[2]->memberof == oper->_ops[1])
+                    continue;
 
                 value = oper->_ops[0];
 
@@ -2487,8 +2494,12 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             }
         }
 
-        /* TODO(divVerent) what does this do? */
-        if (instr->opcode == INSTR_MUL_VF)
+        /* These operations need a special case as they can break when using
+         * same source and destination operand otherwise, as the engine may
+         * read the source multiple times. */
+        if (instr->opcode == INSTR_MUL_VF ||
+            instr->opcode == VINSTR_BITAND_VF ||
+            instr->opcode == VINSTR_BITOR_VF)
         {
             value = instr->_ops[2];
             /* the float source will get an additional lifetime */
