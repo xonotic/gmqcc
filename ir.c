@@ -613,13 +613,7 @@ static bool instr_is_operation(uint16_t op)
              (op >= INSTR_NOT_F  && op <= INSTR_NOT_FNC) ||
              (op >= INSTR_AND    && op <= INSTR_BITOR) ||
              (op >= INSTR_CALL0  && op <= INSTR_CALL8) ||
-             (op == VINSTR_BITXOR) ||
-             (op == VINSTR_BITAND_V) ||
-             (op == VINSTR_BITAND_VF) ||
-             (op == VINSTR_BITOR_V) ||
-             (op == VINSTR_BITOR_VF) ||
-             (op == VINSTR_BITXOR_V) ||
-             (op == VINSTR_BITXOR_VF));
+             (op >= VINSTR_BITAND_V && op <= VINSTR_BITXOR_VF) );
 }
 
 static bool ir_function_pass_peephole(ir_function *self)

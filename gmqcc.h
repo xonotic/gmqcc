@@ -718,14 +718,15 @@ enum {
      * No-Return-Call
      */
     VINSTR_NRCALL,
+
     /* Emulated instructions. */
-    VINSTR_BITXOR,
-    VINSTR_BITAND_V,
-    VINSTR_BITOR_V,
-    VINSTR_BITXOR_V,
+    VINSTR_BITAND_V, /* BITAND_V must be the first emulated bitop */
     VINSTR_BITAND_VF,
+    VINSTR_BITOR_V,
     VINSTR_BITOR_VF,
-    VINSTR_BITXOR_VF
+    VINSTR_BITXOR,
+    VINSTR_BITXOR_V,
+    VINSTR_BITXOR_VF /* BITXOR_VF must be the last emulated bitop */
 };
 
 /* TODO: elide */
