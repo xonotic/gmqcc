@@ -2812,7 +2812,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             code_push_statement(code, &stmt, instr->context.line);
 
             /* instruction generated */
-            return true;
+            continue;
         }
 
         if (instr->opcode == VINSTR_BITOR_VV) {
@@ -2831,7 +2831,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             code_push_statement(code, &stmt, instr->context.line);
 
             /* instruction generated */
-            return true;
+            continue;
         }
 
         if (instr->opcode == VINSTR_BITAND_VF) {
@@ -2848,7 +2848,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             code_push_statement(code, &stmt, instr->context.line);
 
             /* instruction generated */
-            return true;
+            continue;
         }
 
         if (instr->opcode == VINSTR_BITOR_VF) {
@@ -2865,7 +2865,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             code_push_statement(code, &stmt, instr->context.line);
 
             /* instruction generated */
-            return true;
+            continue;
         }
 
         if (instr->opcode == VINSTR_COND) {
