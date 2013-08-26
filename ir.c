@@ -312,6 +312,7 @@ static void ir_function_delete_quick(ir_function *self);
 ir_builder* ir_builder_new(const char *modulename)
 {
     ir_builder* self;
+    size_t      i;
 
     self = (ir_builder*)mem_a(sizeof(*self));
     if (!self)
@@ -344,6 +345,15 @@ ir_builder* ir_builder_new(const char *modulename)
     self->nil = ir_value_var("nil", store_value, TYPE_NIL);
     self->nil->cvq = CV_CONST;
 
+    for (i = 0; i != IR_MAX_VINSTR_TEMPS; ++i) {
+        /* we write to them, but they're not supposed to be used outside the IR, so
+         * let's not allow the generation of ir_instrs which use these.
+         * So it's a constant noexpr.
+         */
+        self->vinstr_temp[i] = ir_value_var("vinstr_temp", store_value, TYPE_NOEXPR);
+        self->vinstr_temp[i]->cvq = CV_CONST;
+    }
+
     self->reserved_va_count = NULL;
     self->code              = code_init();
 
@@ -374,6 +384,9 @@ void ir_builder_delete(ir_builder* self)
         ir_value_delete(self->fields[i]);
     }
     ir_value_delete(self->nil);
+    for (i = 0; i != IR_MAX_VINSTR_TEMPS; ++i) {
+        ir_value_delete(self->vinstr_temp[i]);
+    }
     vec_free(self->fields);
     vec_free(self->filenames);
     vec_free(self->filestrings);
@@ -1026,6 +1039,11 @@ static void ir_instr_delete(ir_instr *self)
 
 static bool ir_instr_op(ir_instr *self, int op, ir_value *v, bool writing)
 {
+    if (v && v->vtype == TYPE_NOEXPR) {
+        irerror(self->context, "tried to use a NOEXPR value");
+        return false;
+    }
+
     if (self->_ops[op]) {
         size_t idx;
         if (writing && vec_ir_instr_find(self->_ops[op]->writes, self, &idx))
@@ -3739,6 +3757,14 @@ bool ir_builder_generate(ir_builder *self, const char *filename)
     vec_push(self->code->globals, 0);
     vec_push(self->code->globals, 0);
     vec_push(self->code->globals, 0);
+
+    /* generate virtual-instruction temps */
+    for (i = 0; i < IR_MAX_VINSTR_TEMPS; ++i) {
+        ir_value_code_setaddr(self->vinstr_temp[i], vec_size(self->code->globals));
+        vec_push(self->code->globals, 0);
+        vec_push(self->code->globals, 0);
+        vec_push(self->code->globals, 0);
+    }
 
     /* generate global temps */
     self->first_common_globaltemp = vec_size(self->code->globals);
