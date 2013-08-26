@@ -613,10 +613,13 @@ static bool instr_is_operation(uint16_t op)
              (op >= INSTR_NOT_F  && op <= INSTR_NOT_FNC) ||
              (op >= INSTR_AND    && op <= INSTR_BITOR) ||
              (op >= INSTR_CALL0  && op <= INSTR_CALL8) ||
-             (op == VINSTR_BITAND_VV) ||
+             (op == VINSTR_BITXOR) ||
+             (op == VINSTR_BITAND_V) ||
              (op == VINSTR_BITAND_VF) ||
-             (op == VINSTR_BITOR_VV) ||
-             (op == VINSTR_BITOR_VF));
+             (op == VINSTR_BITOR_V) ||
+             (op == VINSTR_BITOR_VF) ||
+             (op == VINSTR_BITXOR_V) ||
+             (op == VINSTR_BITXOR_VF));
 }
 
 static bool ir_function_pass_peephole(ir_function *self)
@@ -653,10 +656,16 @@ static bool ir_function_pass_peephole(ir_function *self)
                         continue;
                 }
 
+                /* Emulated bitxor cannot deal with aliased inputs. */
+                if (oper->opcode == VINSTR_BITXOR && oper->_ops[2]->memberof == oper->_ops[1])
+                    continue;
+
                 /* Emulated bitand/bitor for vector+float cannot deal with aliased inputs. */
                 if (oper->opcode == VINSTR_BITAND_VF && oper->_ops[2]->memberof == oper->_ops[1])
                     continue;
                 if (oper->opcode == VINSTR_BITOR_VF && oper->_ops[2]->memberof == oper->_ops[1])
+                    continue;
+                if (oper->opcode == VINSTR_BITXOR_VF && oper->_ops[2]->memberof == oper->_ops[1])
                     continue;
 
                 value = oper->_ops[0];
@@ -1781,6 +1790,7 @@ ir_value* ir_block_create_binop(ir_block *self, lex_ctx_t ctx,
 #endif
         case INSTR_BITAND:
         case INSTR_BITOR:
+        case VINSTR_BITXOR:
 #if 0
         case INSTR_SUB_S: /* -- offset of string as float */
         case INSTR_MUL_IF:
@@ -1817,10 +1827,12 @@ ir_value* ir_block_create_binop(ir_block *self, lex_ctx_t ctx,
         case INSTR_SUB_V:
         case INSTR_MUL_VF:
         case INSTR_MUL_FV:
-        case VINSTR_BITAND_VV:
-        case VINSTR_BITOR_VV:
+        case VINSTR_BITAND_V:
+        case VINSTR_BITOR_V:
+        case VINSTR_BITXOR_V:
         case VINSTR_BITAND_VF:
         case VINSTR_BITOR_VF:
+        case VINSTR_BITXOR_VF:
 #if 0
         case INSTR_DIV_VF:
         case INSTR_MUL_IV:
@@ -2520,8 +2532,11 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
          * same source and destination operand otherwise, as the engine may
          * read the source multiple times. */
         if (instr->opcode == INSTR_MUL_VF ||
+            instr->opcode == VINSTR_BITXOR ||
             instr->opcode == VINSTR_BITAND_VF ||
-            instr->opcode == VINSTR_BITOR_VF)
+            instr->opcode == VINSTR_BITOR_VF ||
+            instr->opcode == VINSTR_BITXOR_VF ||
+            instr->opcode == VINSTR_BITXOR_V)
         {
             value = instr->_ops[2];
             /* the float source will get an additional lifetime */
@@ -2786,6 +2801,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
     ir_block *onfalse;
     size_t    stidx;
     size_t    i;
+    int       j;
 
     block->generated = true;
     block->code_start = vec_size(code->statements);
@@ -2818,7 +2834,28 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             return true;
         }
 
-        if (instr->opcode == VINSTR_BITAND_VV) {
+        if (instr->opcode == VINSTR_BITXOR) {
+            stmt.opcode = INSTR_BITOR;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context.line);
+            stmt.opcode = INSTR_BITAND;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            code_push_statement(code, &stmt, instr->context.line);
+            stmt.opcode = INSTR_SUB_F;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[0]);
+            stmt.o2.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context.line);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITAND_V) {
             stmt.opcode = INSTR_BITAND;
             stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
             stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
@@ -2837,7 +2874,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             continue;
         }
 
-        if (instr->opcode == VINSTR_BITOR_VV) {
+        if (instr->opcode == VINSTR_BITOR_V) {
             stmt.opcode = INSTR_BITOR;
             stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
             stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
@@ -2850,6 +2887,29 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             ++stmt.o1.s1;
             ++stmt.o2.s1;
             ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITXOR_V) {
+            for (j = 0; j < 3; ++j) {
+                stmt.opcode = INSTR_BITOR;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]) + j;
+                stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]) + j;
+                code_push_statement(code, &stmt, instr->context.line);
+                stmt.opcode = INSTR_BITAND;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]) + j;
+                stmt.o3.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]) + j;
+                code_push_statement(code, &stmt, instr->context.line);
+            }
+            stmt.opcode = INSTR_SUB_V;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[0]);
+            stmt.o2.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
             code_push_statement(code, &stmt, instr->context.line);
 
             /* instruction generated */
@@ -2884,6 +2944,29 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             code_push_statement(code, &stmt, instr->context.line);
             ++stmt.o1.s1;
             ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITXOR_VF) {
+            for (j = 0; j < 3; ++j) {
+                stmt.opcode = INSTR_BITOR;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+                stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]) + j;
+                code_push_statement(code, &stmt, instr->context.line);
+                stmt.opcode = INSTR_BITAND;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+                stmt.o3.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]) + j;
+                code_push_statement(code, &stmt, instr->context.line);
+            }
+            stmt.opcode = INSTR_SUB_V;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[0]);
+            stmt.o2.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
             code_push_statement(code, &stmt, instr->context.line);
 
             /* instruction generated */
@@ -3856,10 +3939,13 @@ static const char *qc_opname(int op)
         case VINSTR_PHI:       return "PHI";
         case VINSTR_JUMP:      return "JUMP";
         case VINSTR_COND:      return "COND";
-        case VINSTR_BITAND_VV: return "BITAND_VV";
-        case VINSTR_BITOR_VV:  return "BITOR_VV";
+        case VINSTR_BITXOR:    return "BITXOR";
+        case VINSTR_BITAND_V:  return "BITAND_V";
+        case VINSTR_BITOR_V:   return "BITOR_V";
+        case VINSTR_BITXOR_V:  return "BITXOR_V";
         case VINSTR_BITAND_VF: return "BITAND_VF";
         case VINSTR_BITOR_VF:  return "BITOR_VF";
+        case VINSTR_BITXOR_VF: return "BITXOR_VF";
         default:               return "<UNK>";
     }
 }

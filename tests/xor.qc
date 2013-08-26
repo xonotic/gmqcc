@@ -38,6 +38,12 @@ void main() {
     // vector ^ vector
     // vector ^ float
     // are legal in constant expressions (currently)
+    vector v1 = '5 2 5';
+    vector v2 = '3 10 3';
+
+    print("vv: ", vtos(v1 ^ v2), "\n");
+    print("vf: ", vtos(v1 ^ 10), "\n");
+    
     const vector v3 = '5 2 5' ^ '3 10 3';
     const vector v4 = '5 2 5' ^ 10;
     

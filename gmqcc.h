@@ -719,10 +719,13 @@ enum {
      */
     VINSTR_NRCALL,
     /* Emulated instructions. */
-    VINSTR_BITAND_VV,
-    VINSTR_BITOR_VV,
+    VINSTR_BITXOR,
+    VINSTR_BITAND_V,
+    VINSTR_BITOR_V,
+    VINSTR_BITXOR_V,
     VINSTR_BITAND_VF,
-    VINSTR_BITOR_VF
+    VINSTR_BITOR_VF,
+    VINSTR_BITXOR_VF
 };
 
 /* TODO: elide */
