@@ -121,6 +121,14 @@ static GMQCC_INLINE vec3_t vec3_xorvf(vec3_t a, qcfloat_t b) {
     return out;
 }
 
+static GMQCC_INLINE vec3_t vec3_not(vec3_t a) {
+    vec3_t out;
+    out.x = (qcfloat_t)(~((qcint_t)a.x));
+    out.y = (qcfloat_t)(~((qcint_t)a.y));
+    out.z = (qcfloat_t)(~((qcint_t)a.z));
+    return out;
+}
+
 static GMQCC_INLINE qcfloat_t vec3_mulvv(vec3_t a, vec3_t b) {
     return (a.x * b.x + a.y * b.y + a.z * b.z);
 }
@@ -216,6 +224,7 @@ fold_t *fold_init(parser_t *parser) {
     (void)fold_constgen_float (fold, -1.0f);
 
     (void)fold_constgen_vector(fold, vec3_create(0.0f, 0.0f, 0.0f));
+    (void)fold_constgen_vector(fold, vec3_create(-1.0f, -1.0f, -1.0f));
 
     return fold;
 }
@@ -589,8 +598,15 @@ static GMQCC_INLINE ast_expression *fold_op_cmp(fold_t *fold, ast_value *a, ast_
 }
 
 static GMQCC_INLINE ast_expression *fold_op_bnot(fold_t *fold, ast_value *a) {
-    if (fold_can_1(a))
-        return fold_constgen_float(fold, ~((qcint_t)fold_immvalue_float(a)));
+    if (isfloat(a)) {
+        if (fold_can_1(a))
+            return fold_constgen_float(fold, ~((qcint_t)fold_immvalue_float(a)));
+    } else {
+        if (isvector(a)) {
+            if (fold_can_1(a))
+                return fold_constgen_vector(fold, vec3_not(fold_immvalue_vector(a)));
+        }
+    }
     return NULL;
 }
 

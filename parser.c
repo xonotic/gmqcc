@@ -1028,7 +1028,8 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             break;
         case opid2('&','='):
         case opid2('|','='):
-            if (NotSameType(TYPE_FLOAT)) {
+        case opid2('^','='):
+            if (NotSameType(TYPE_FLOAT) && NotSameType(TYPE_VECTOR)) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
                 compile_error(ctx, "invalid types used in expression: %s and %s",
@@ -1042,9 +1043,14 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 assignop = type_storep_instr[exprs[0]->vtype];
             else
                 assignop = type_store_instr[exprs[0]->vtype];
-            out = (ast_expression*)ast_binstore_new(ctx, assignop,
-                                                    (op->id == opid2('&','=') ? INSTR_BITAND : INSTR_BITOR),
-                                                    exprs[0], exprs[1]);
+            if (exprs[0]->vtype == TYPE_FLOAT)
+                out = (ast_expression*)ast_binstore_new(ctx, assignop,
+                                                        (op->id == opid2('^','=') ? VINSTR_BITXOR : op->id == opid2('&','=') ? INSTR_BITAND : INSTR_BITOR),
+                                                        exprs[0], exprs[1]);
+            else
+                out = (ast_expression*)ast_binstore_new(ctx, assignop,
+                                                        (op->id == opid2('^','=') ? VINSTR_BITXOR_V : op->id == opid2('&','=') ? VINSTR_BITAND_V : VINSTR_BITOR_V),
+                                                        exprs[0], exprs[1]);
             break;
         case opid3('&','~','='):
             /* This is like: a &= ~(b);
@@ -1074,13 +1080,18 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             break;
 
         case opid2('~', 'P'):
-            if (exprs[0]->vtype != TYPE_FLOAT) {
+            if (exprs[0]->vtype != TYPE_FLOAT && exprs[0]->vtype != TYPE_VECTOR) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 compile_error(ast_ctx(exprs[0]), "invalid type for bit not: %s", ty1);
                 return false;
             }
-            if (!(out = fold_op(parser->fold, op, exprs)))
-                out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F, (ast_expression*)parser->fold->imm_float[2], exprs[0]);
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                if (exprs[0]->vtype == TYPE_FLOAT) {
+                    out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F, (ast_expression*)parser->fold->imm_float[2], exprs[0]);
+                } else {
+                    out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_V, (ast_expression*)parser->fold->imm_vector[1], exprs[0]);
+                }
+            }
             break;
     }
 #undef NotSameType
