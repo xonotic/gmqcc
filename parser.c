@@ -1057,7 +1057,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
              * But QC has no bitwise-not, so we implement it as
              * a -= a & (b);
              */
-            if (NotSameType(TYPE_FLOAT)) {
+            if (NotSameType(TYPE_FLOAT) && NotSameType(TYPE_VECTOR)) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
                 compile_error(ctx, "invalid types used in expression: %s and %s",
@@ -1068,13 +1068,19 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 assignop = type_storep_instr[exprs[0]->vtype];
             else
                 assignop = type_store_instr[exprs[0]->vtype];
-            out = (ast_expression*)ast_binary_new(ctx, INSTR_BITAND, exprs[0], exprs[1]);
+            if (exprs[0]->vtype == TYPE_FLOAT)
+                out = (ast_expression*)ast_binary_new(ctx, INSTR_BITAND, exprs[0], exprs[1]);
+            else
+                out = (ast_expression*)ast_binary_new(ctx, VINSTR_BITAND_V, exprs[0], exprs[1]);
             if (!out)
                 return false;
             if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
                 compile_error(ctx, "assignment to constant `%s`", asvalue[0]->name);
             }
-            asbinstore = ast_binstore_new(ctx, assignop, INSTR_SUB_F, exprs[0], out);
+            if (exprs[0]->vtype == TYPE_FLOAT)
+                asbinstore = ast_binstore_new(ctx, assignop, INSTR_SUB_F, exprs[0], out);
+            else
+                asbinstore = ast_binstore_new(ctx, assignop, INSTR_SUB_V, exprs[0], out);
             asbinstore->keep_dest = true;
             out = (ast_expression*)asbinstore;
             break;
