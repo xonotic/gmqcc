@@ -2857,12 +2857,6 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             return true;
         }
 
-        if (stmt.opcode == INSTR_RETURN || stmt.opcode == INSTR_DONE)
-        {
-            stmt.o1.u1 = stmt.o3.u1;
-            stmt.o3.u1 = 0;
-        }
-
         if (instr->opcode == VINSTR_COND) {
             ontrue  = instr->bops[0];
             onfalse = instr->bops[1];
