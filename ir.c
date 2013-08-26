@@ -1788,6 +1788,10 @@ ir_value* ir_block_create_binop(ir_block *self, lex_ctx_t ctx,
         case INSTR_SUB_V:
         case INSTR_MUL_VF:
         case INSTR_MUL_FV:
+        case VINSTR_BITAND_VV:
+        case VINSTR_BITOR_VV:
+        case VINSTR_BITAND_VF:
+        case VINSTR_BITOR_VF:
 #if 0
         case INSTR_DIV_VF:
         case INSTR_MUL_IV:
@@ -2483,6 +2487,7 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             }
         }
 
+        /* TODO(divVerent) what does this do? */
         if (instr->opcode == INSTR_MUL_VF)
         {
             value = instr->_ops[2];
@@ -2778,6 +2783,84 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
 
             /* no further instructions can be in this block */
             return true;
+        }
+
+        if (instr->opcode == VINSTR_BITAND_VV) {
+            stmt.opcode = INSTR_BITAND;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+
+            /* instruction generated */
+            return true;
+        }
+
+        if (instr->opcode == VINSTR_BITOR_VV) {
+            stmt.opcode = INSTR_BITOR;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+
+            /* instruction generated */
+            return true;
+        }
+
+        if (instr->opcode == VINSTR_BITAND_VF) {
+            stmt.opcode = INSTR_BITAND;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+
+            /* instruction generated */
+            return true;
+        }
+
+        if (instr->opcode == VINSTR_BITOR_VF) {
+            stmt.opcode = INSTR_BITOR;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context.line);
+
+            /* instruction generated */
+            return true;
+        }
+
+        if (stmt.opcode == INSTR_RETURN || stmt.opcode == INSTR_DONE)
+        {
+            stmt.o1.u1 = stmt.o3.u1;
+            stmt.o3.u1 = 0;
         }
 
         if (instr->opcode == VINSTR_COND) {
@@ -3734,11 +3817,15 @@ static const char *qc_opname(int op)
     if (op < VINSTR_END)
         return util_instr_str[op];
     switch (op) {
-        case VINSTR_END:  return "END";
-        case VINSTR_PHI:  return "PHI";
-        case VINSTR_JUMP: return "JUMP";
-        case VINSTR_COND: return "COND";
-        default:          return "<UNK>";
+        case VINSTR_END:       return "END";
+        case VINSTR_PHI:       return "PHI";
+        case VINSTR_JUMP:      return "JUMP";
+        case VINSTR_COND:      return "COND";
+        case VINSTR_BITAND_VV: return "BITAND_VV";
+        case VINSTR_BITOR_VV:  return "BITOR_VV";
+        case VINSTR_BITAND_VF: return "BITAND_VF";
+        case VINSTR_BITOR_VF:  return "BITOR_VF";
+        default:               return "<UNK>";
     }
 }
 

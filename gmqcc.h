@@ -717,7 +717,12 @@ enum {
      * Creating this causes IR blocks to be marked as 'final'.
      * No-Return-Call
      */
-    VINSTR_NRCALL
+    VINSTR_NRCALL,
+    /* Emulated instructions. */
+    VINSTR_BITAND_VV,
+    VINSTR_BITOR_VV,
+    VINSTR_BITAND_VF,
+    VINSTR_BITOR_VF
 };
 
 /* TODO: elide */

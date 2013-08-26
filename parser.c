@@ -623,16 +623,45 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
 
         case opid1('|'):
         case opid1('&'):
-            if (NotSameType(TYPE_FLOAT)) {
+            if ( !(exprs[0]->vtype == TYPE_FLOAT  && exprs[1]->vtype == TYPE_FLOAT) &&
+                 !(exprs[0]->vtype == TYPE_VECTOR && exprs[1]->vtype == TYPE_FLOAT) &&
+                 !(exprs[0]->vtype == TYPE_VECTOR && exprs[1]->vtype == TYPE_VECTOR))
+            {
                 compile_error(ctx, "invalid types used in expression: cannot perform bit operations between types %s and %s",
                               type_name[exprs[0]->vtype],
                               type_name[exprs[1]->vtype]);
                 return false;
             }
-            if (!(out = fold_op(parser->fold, op, exprs)))
-                out = (ast_expression*)ast_binary_new(ctx,
-                    (op->id == opid1('|') ? INSTR_BITOR : INSTR_BITAND),
-                    exprs[0], exprs[1]);
+
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                /*
+                 * IF the first expression is float, the following will be too
+                 * since scalar ^ vector is not allowed.
+                 */
+                if (exprs[0]->vtype == TYPE_FLOAT) {
+                    out = (ast_expression*)ast_binary_new(ctx,
+                        (op->id == opid1('|') ? INSTR_BITOR : INSTR_BITAND),
+                        exprs[0], exprs[1]);
+                } else {
+                    /*
+                     * The first is a vector: vector is allowed to xor with vector and
+                     * with scalar, branch here for the second operand.
+                     */
+                    if (exprs[1]->vtype == TYPE_VECTOR) {
+                        /*
+                         * Xor all the values of the vector components against the
+                         * vectors components in question.
+                         */
+                        out = (ast_expression*)ast_binary_new(ctx,
+                            (op->id == opid1('|') ? VINSTR_BITOR_VV : VINSTR_BITAND_VV),
+                            exprs[0], exprs[1]);
+                    } else {
+                        out = (ast_expression*)ast_binary_new(ctx,
+                            (op->id == opid1('|') ? VINSTR_BITOR_VF : VINSTR_BITAND_VF),
+                            exprs[0], exprs[1]);
+                    }
+                }
+            }
             break;
         case opid1('^'):
             /*
