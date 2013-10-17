@@ -1396,6 +1396,23 @@ int lex_do(lex_file *lex)
         return (lex->tok.ttype = TOKEN_OPERATOR);
     }
 
+    /* len operator */
+    if (ch == 'l') {
+        if ((nextch = lex_getch(lex)) == 'e') {
+            if ((nextch = lex_getch(lex)) == 'n') {
+                lex_tokench(lex, 'l');
+                lex_tokench(lex, 'e');
+                lex_tokench(lex, 'n');
+                lex_endtoken(lex);
+                return (lex->tok.ttype = TOKEN_OPERATOR);
+            } else {
+                lex_ungetch(lex, nextch);
+            }
+        } else {
+            lex_ungetch(lex, nextch);
+        }
+    }
+
     if (isident_start(ch))
     {
         const char *v;

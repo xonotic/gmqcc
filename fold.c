@@ -41,6 +41,7 @@
 #define isfloat(X)      (((ast_expression*)(X))->vtype == TYPE_FLOAT)
 #define isvector(X)     (((ast_expression*)(X))->vtype == TYPE_VECTOR)
 #define isstring(X)     (((ast_expression*)(X))->vtype == TYPE_STRING)
+#define isarray(X)      (((ast_expression*)(X))->vtype == TYPE_ARRAY)
 #define isfloats(X,Y)   (isfloat  (X) && isfloat (Y))
 
 /*
@@ -632,6 +633,14 @@ static GMQCC_INLINE ast_expression *fold_op_cross(fold_t *fold, ast_value *a, as
     return NULL;
 }
 
+static GMQCC_INLINE ast_expression *fold_op_length(fold_t *fold, ast_value *a) {
+    if (fold_can_1(a) && isstring(a))
+        return fold_constgen_float(fold, strlen(fold_immvalue_string(a)));
+    if (isarray(a))
+        return fold_constgen_float(fold, vec_size(a->initlist));
+    return NULL;
+}
+
 ast_expression *fold_op(fold_t *fold, const oper_info *info, ast_expression **opexprs) {
     ast_value      *a = (ast_value*)opexprs[0];
     ast_value      *b = (ast_value*)opexprs[1];
@@ -690,6 +699,7 @@ ast_expression *fold_op(fold_t *fold, const oper_info *info, ast_expression **op
         fold_op_case(2, ('=', '='),    cmp,    (fold, a, b, false));
         fold_op_case(2, ('~', 'P'),    bnot,   (fold, a));
         fold_op_case(2, ('>', '<'),    cross,  (fold, a, b));
+        fold_op_case(3, ('l','e','n'), length, (fold, a));
     }
     #undef fold_op_case
     compile_error(fold_ctx(fold), "internal error: attempted to constant-fold for unsupported operator");

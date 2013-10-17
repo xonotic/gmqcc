@@ -175,6 +175,7 @@ typedef struct {
 
 static const oper_info c_operators[] = {
     { "(",   0, opid1('('),         ASSOC_LEFT,  99, OP_PREFIX, false}, /* paren expression - non function call */
+    { "len", 1, opid3('l','e','n'), ASSOC_RIGHT, 98, OP_PREFIX, true},  /* len operator */
 
     { "++",  1, opid3('S','+','+'), ASSOC_LEFT,  17, OP_SUFFIX, false},
     { "--",  1, opid3('S','-','-'), ASSOC_LEFT,  17, OP_SUFFIX, false},

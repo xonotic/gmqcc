@@ -1109,6 +1109,18 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             out = (ast_expression*)asbinstore;
             break;
 
+        case opid3('l', 'e', 'n'):
+            if (exprs[0]->vtype != TYPE_ARRAY && exprs[0]->vtype != TYPE_STRING) {
+                ast_type_to_string(exprs[0], ty1, sizeof(ty1));
+                compile_error(ast_ctx(exprs[0]), "invalid type for length operator: %s", ty1);
+                return false;
+            }
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                compile_error(ast_ctx(exprs[0]), "expected constant expression as operand to length operator");
+                return false;
+            }
+            break;
+
         case opid2('~', 'P'):
             if (exprs[0]->vtype != TYPE_FLOAT && exprs[0]->vtype != TYPE_VECTOR) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
