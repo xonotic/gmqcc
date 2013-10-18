@@ -41,3 +41,11 @@ check_opt() {
 check_opt FLAGS f
 check_opt WARNS W
 check_opt OPTIMIZATIONS O
+
+# TODO: linux version
+if [ "$(uname -s)" != "Linux" ]; then
+    for i in doc/*.1;
+    do
+        mandoc -Tlint -Wall "$i";
+    done
+fi

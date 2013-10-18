@@ -37,26 +37,100 @@
  */
 typedef union {
     void   *enter;
-    qcint_t   leave;
+    qcint_t leave;
 } code_hash_entry_t;
 
 /* Some sanity macros */
 #define CODE_HASH_ENTER(ENTRY) ((ENTRY).enter)
 #define CODE_HASH_LEAVE(ENTRY) ((ENTRY).leave)
 
-void code_push_statement(code_t *code, prog_section_statement_t *stmt, int linenum)
+void code_push_statement(code_t *code, prog_section_statement_t *stmt_in, lex_ctx_t ctx)
 {
-    vec_push(code->statements, *stmt);
-    vec_push(code->linenums,   linenum);
+    prog_section_statement_t stmt = *stmt_in;
+
+    if (OPTS_FLAG(TYPELESS_STORES)) {
+        switch (stmt.opcode) {
+            case INSTR_LOAD_S:
+            case INSTR_LOAD_ENT:
+            case INSTR_LOAD_FLD:
+            case INSTR_LOAD_FNC:
+                stmt.opcode = INSTR_LOAD_F;
+                break;
+            case INSTR_STORE_S:
+            case INSTR_STORE_ENT:
+            case INSTR_STORE_FLD:
+            case INSTR_STORE_FNC:
+                stmt.opcode = INSTR_STORE_F;
+                break;
+            case INSTR_STOREP_S:
+            case INSTR_STOREP_ENT:
+            case INSTR_STOREP_FLD:
+            case INSTR_STOREP_FNC:
+                stmt.opcode = INSTR_STOREP_F;
+                break;
+        }
+    }
+
+
+    if (OPTS_FLAG(SORT_OPERANDS)) {
+        uint16_t pair;
+
+        switch (stmt.opcode) {
+            case INSTR_MUL_F:
+            case INSTR_MUL_V:
+            case INSTR_ADD_F:
+            case INSTR_EQ_F:
+            case INSTR_EQ_S:
+            case INSTR_EQ_E:
+            case INSTR_EQ_FNC:
+            case INSTR_NE_F:
+            case INSTR_NE_V:
+            case INSTR_NE_S:
+            case INSTR_NE_E:
+            case INSTR_NE_FNC:
+            case INSTR_AND:
+            case INSTR_OR:
+            case INSTR_BITAND:
+            case INSTR_BITOR:
+                if (stmt.o1.u1 < stmt.o2.u1) {
+                    uint16_t a = stmt.o2.u1;
+                    stmt.o1.u1 = stmt.o2.u1;
+                    stmt.o2.u1 = a;
+                }
+                break;
+
+            case INSTR_MUL_VF: pair = INSTR_MUL_FV; goto case_pair_gen;
+            case INSTR_MUL_FV: pair = INSTR_MUL_VF; goto case_pair_gen;
+            case INSTR_LT:     pair = INSTR_GT;     goto case_pair_gen;
+            case INSTR_GT:     pair = INSTR_LT;     goto case_pair_gen;
+            case INSTR_LE:     pair = INSTR_GT;     goto case_pair_gen;
+            case INSTR_GE:     pair = INSTR_LE;
+
+            case_pair_gen:
+                if (stmt.o1.u1 < stmt.o2.u1) {
+                    uint16_t x  = stmt.o1.u1;
+                    stmt.o1.u1  = stmt.o2.u1;
+                    stmt.o2.u1  = x;
+                    stmt.opcode = pair;
+                }
+                break;
+        }
+    }
+
+    vec_push(code->statements, stmt);
+    vec_push(code->linenums,   (int)ctx.line);
+    vec_push(code->columnnums, (int)ctx.column);
 }
 
 void code_pop_statement(code_t *code)
 {
     vec_pop(code->statements);
     vec_pop(code->linenums);
+    vec_pop(code->columnnums);
 }
 
 code_t *code_init() {
+    static lex_ctx_t                empty_ctx       = {0, 0, 0};
     static prog_section_function_t  empty_function  = {0,0,0,0,0,0,0,{0,0,0,0,0,0,0,0}};
     static prog_section_statement_t empty_statement = {0,{0},{0},{0}};
     static prog_section_def_t       empty_def       = {0, 0, 0};
@@ -78,7 +152,7 @@ code_t *code_init() {
     vec_push(code->chars, '\0');
     vec_push(code->functions,  empty_function);
 
-    code_push_statement(code, &empty_statement, 0);
+    code_push_statement(code, &empty_statement, empty_ctx);
 
     vec_push(code->defs,    empty_def);
     vec_push(code->fields,  empty_def);
@@ -137,7 +211,8 @@ static size_t code_size_generic(code_t *code, prog_header_t *code_header, bool l
         size += sizeof(code_header->globals.length);
         size += sizeof(code_header->fields.length);
         size += sizeof(code_header->statements.length);
-        size += sizeof(code->linenums[0]) * vec_size(code->linenums);
+        size += sizeof(code->linenums[0])   * vec_size(code->linenums);
+        size += sizeof(code->columnnums[0]) * vec_size(code->columnnums);
     } else {
         size += sizeof(prog_header_t);
         size += sizeof(prog_section_statement_t) * vec_size(code->statements);
@@ -178,8 +253,6 @@ static void code_create_header(code_t *code, prog_header_t *code_header, const c
     code_header->entfield          = code->entfields;
 
     if (OPTS_FLAG(DARKPLACES_STRING_TABLE_BUG)) {
-        util_debug("GEN", "Patching stringtable for -fdarkplaces-stringtablebug\n");
-
         /* >= + P */
         vec_push(code->chars, '\0'); /* > */
         vec_push(code->chars, '\0'); /* = */
@@ -249,6 +322,8 @@ static void code_stats(const char *filename, const char *lnofile, code_t *code, 
         con_out("        name: %s\n",  lnofile);
         con_out("        size: %u (bytes)\n",  code_size_debug(code, code_header));
     }
+
+    con_out("\n");
 }
 
 /*
@@ -309,6 +384,7 @@ static bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, u
 
     vec_free(code->statements);
     vec_free(code->linenums);
+    vec_free(code->columnnums);
     vec_free(code->defs);
     vec_free(code->fields);
     vec_free(code->functions);
@@ -325,8 +401,7 @@ static bool code_write_memory(code_t *code, uint8_t **datmem, size_t *sizedat, u
 
 bool code_write(code_t *code, const char *filename, const char *lnofile) {
     prog_header_t  code_header;
-    FILE          *fp           = NULL;
-    size_t         it           = 2;
+    fs_file_t     *fp = NULL;
 
     code_create_header(code, &code_header, filename, lnofile);
 
@@ -337,17 +412,18 @@ bool code_write(code_t *code, const char *filename, const char *lnofile) {
         if (!fp)
             return false;
 
-        util_endianswap(&version,      1,                         sizeof(version));
-        util_endianswap(code->linenums, vec_size(code->linenums), sizeof(code->linenums[0]));
+        util_endianswap(&version,         1,                          sizeof(version));
+        util_endianswap(code->linenums,   vec_size(code->linenums),   sizeof(code->linenums[0]));
+        util_endianswap(code->columnnums, vec_size(code->columnnums), sizeof(code->columnnums[0]));
 
-
-        if (fs_file_write("LNOF",                          4,                                      1,                        fp) != 1 ||
-            fs_file_write(&version,                        sizeof(version),                        1,                        fp) != 1 ||
-            fs_file_write(&code_header.defs.length,        sizeof(code_header.defs.length),        1,                        fp) != 1 ||
-            fs_file_write(&code_header.globals.length,     sizeof(code_header.globals.length),     1,                        fp) != 1 ||
-            fs_file_write(&code_header.fields.length,      sizeof(code_header.fields.length),      1,                        fp) != 1 ||
-            fs_file_write(&code_header.statements.length,  sizeof(code_header.statements.length),  1,                        fp) != 1 ||
-            fs_file_write(code->linenums,                  sizeof(code->linenums[0]),              vec_size(code->linenums), fp) != vec_size(code->linenums))
+        if (fs_file_write("LNOF",                          4,                                      1,                          fp) != 1 ||
+            fs_file_write(&version,                        sizeof(version),                        1,                          fp) != 1 ||
+            fs_file_write(&code_header.defs.length,        sizeof(code_header.defs.length),        1,                          fp) != 1 ||
+            fs_file_write(&code_header.globals.length,     sizeof(code_header.globals.length),     1,                          fp) != 1 ||
+            fs_file_write(&code_header.fields.length,      sizeof(code_header.fields.length),      1,                          fp) != 1 ||
+            fs_file_write(&code_header.statements.length,  sizeof(code_header.statements.length),  1,                          fp) != 1 ||
+            fs_file_write(code->linenums,                  sizeof(code->linenums[0]),              vec_size(code->linenums),   fp) != vec_size(code->linenums) ||
+            fs_file_write(code->columnnums,                sizeof(code->columnnums[0]),            vec_size(code->columnnums), fp) != vec_size(code->columnnums))
         {
             con_err("failed to write lno file\n");
         }
@@ -372,60 +448,6 @@ bool code_write(code_t *code, const char *filename, const char *lnofile) {
         return false;
     }
 
-    util_debug("GEN","HEADER:\n");
-    util_debug("GEN","    version:    = %d\n", code_header.version );
-    util_debug("GEN","    crc16:      = %d\n", code_header.crc16   );
-    util_debug("GEN","    entfield:   = %d\n", code_header.entfield);
-    util_debug("GEN","    statements  = {.offset = % 8d, .length = % 8d}\n", code_header.statements.offset, code_header.statements.length);
-    util_debug("GEN","    defs        = {.offset = % 8d, .length = % 8d}\n", code_header.defs      .offset, code_header.defs      .length);
-    util_debug("GEN","    fields      = {.offset = % 8d, .length = % 8d}\n", code_header.fields    .offset, code_header.fields    .length);
-    util_debug("GEN","    functions   = {.offset = % 8d, .length = % 8d}\n", code_header.functions .offset, code_header.functions .length);
-    util_debug("GEN","    globals     = {.offset = % 8d, .length = % 8d}\n", code_header.globals   .offset, code_header.globals   .length);
-    util_debug("GEN","    strings     = {.offset = % 8d, .length = % 8d}\n", code_header.strings   .offset, code_header.strings   .length);
-
-    /* FUNCTIONS */
-    util_debug("GEN", "FUNCTIONS:\n");
-    for (; it < vec_size(code->functions); it++) {
-        size_t j = code->functions[it].entry;
-        util_debug("GEN", "    {.entry =% 5d, .firstlocal =% 5d, .locals =% 5d, .profile =% 5d, .name =% 5d, .file =% 5d, .nargs =% 5d, .argsize ={%d,%d,%d,%d,%d,%d,%d,%d} }\n",
-            code->functions[it].entry,
-            code->functions[it].firstlocal,
-            code->functions[it].locals,
-            code->functions[it].profile,
-            code->functions[it].name,
-            code->functions[it].file,
-            code->functions[it].nargs,
-            code->functions[it].argsize[0],
-            code->functions[it].argsize[1],
-            code->functions[it].argsize[2],
-            code->functions[it].argsize[3],
-            code->functions[it].argsize[4],
-            code->functions[it].argsize[5],
-            code->functions[it].argsize[6],
-            code->functions[it].argsize[7]
-
-        );
-        util_debug("GEN", "    NAME: %s\n", &code->chars[code->functions[it].name]);
-        /* Internal functions have no code */
-        if (code->functions[it].entry >= 0) {
-            util_debug("GEN", "    CODE:\n");
-            for (;;) {
-                if (code->statements[j].opcode != INSTR_DONE)
-                    util_debug("GEN", "        %-12s {% 5i,% 5i,% 5i}\n",
-                        util_instr_str[code->statements[j].opcode],
-                        code->statements[j].o1.s1,
-                        code->statements[j].o2.s1,
-                        code->statements[j].o3.s1
-                    );
-                else {
-                    util_debug("GEN", "        DONE  {0x00000,0x00000,0x00000}\n");
-                    break;
-                }
-                j++;
-            }
-        }
-    }
-
     fs_file_close(fp);
     code_stats(filename, lnofile, code, &code_header);
     return true;
@@ -434,6 +456,7 @@ bool code_write(code_t *code, const char *filename, const char *lnofile) {
 void code_cleanup(code_t *code) {
     vec_free(code->statements);
     vec_free(code->linenums);
+    vec_free(code->columnnums);
     vec_free(code->defs);
     vec_free(code->fields);
     vec_free(code->functions);

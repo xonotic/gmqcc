@@ -20,12 +20,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+#define GMQCC_PLATFORM_HEADER /* TODO: eliminate! */
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 
 #include "gmqcc.h"
+#include "platform.h"
 
 static const char *task_bins[] = {
     "./gmqcc",
@@ -53,15 +53,15 @@ static const char *task_bins[] = {
 #include <dirent.h>
 #include <unistd.h>
 typedef struct {
-    FILE *handles[3];
-    int   pipes  [3];
+    fs_file_t *handles[3];
+    int        pipes  [3];
 
     int stderr_fd;
     int stdout_fd;
     int pid;
 } popen_t;
 
-static FILE ** task_popen(const char *command, const char *mode) {
+static fs_file_t **task_popen(const char *command, const char *mode) {
     int     inhandle  [2];
     int     outhandle [2];
     int     errhandle [2];
@@ -103,9 +103,9 @@ static FILE ** task_popen(const char *command, const char *mode) {
         data->pipes  [1] = outhandle[0];
         data->pipes  [2] = errhandle[0];
 
-        data->handles[0] = fdopen(inhandle [1], "w");
-        data->handles[1] = fdopen(outhandle[0], mode);
-        data->handles[2] = fdopen(errhandle[0], mode);
+        data->handles[0] = (fs_file_t*)fdopen(inhandle [1], "w");
+        data->handles[1] = (fs_file_t*)fdopen(outhandle[0], mode);
+        data->handles[2] = (fs_file_t*)fdopen(errhandle[0], mode);
 
         /* sigh */
         vec_free(argv);
@@ -137,7 +137,7 @@ task_popen_error_0:
     return NULL;
 }
 
-static int task_pclose(FILE **handles) {
+static int task_pclose(fs_file_t **handles) {
     popen_t *data   = (popen_t*)handles;
     int      status = 0;
 
@@ -152,23 +152,19 @@ static int task_pclose(FILE **handles) {
     return status;
 }
 #else
+    #include <sys/stat.h>
     typedef struct {
-        FILE *handles[3];
-        char  name_err[L_tmpnam];
-        char  name_out[L_tmpnam];
+        fs_file_t *handles[3];
+        char       name_err[L_tmpnam];
+        char       name_out[L_tmpnam];
     } popen_t;
 
-    static FILE **task_popen(const char *command, const char *mode) {
+    static fs_file_t **task_popen(const char *command, const char *mode) {
         char    *cmd  = NULL;
         popen_t *open = (popen_t*)mem_a(sizeof(popen_t));
 
-#ifndef _MSC_VER
-        tmpnam(open->name_err);
-        tmpnam(open->name_out);
-#else
-		tmpnam_s(open->name_err, L_tmpnam);
-		tmpnam_s(open->name_out, L_tmpnam);
-#endif
+        util_tmpnam(open->name_err);
+        util_tmpnam(open->name_out);
 
         (void)mode; /* excluded */
 
@@ -184,17 +180,21 @@ static int task_pclose(FILE **handles) {
         return open->handles;
     }
 
-    static void task_pclose(FILE **files) {
+    static int task_pclose(fs_file_t **files) {
         popen_t *open = ((popen_t*)files);
+
         fs_file_close(files[1]);
         fs_file_close(files[2]);
+
         remove(open->name_err);
         remove(open->name_out);
 
         mem_d(open);
+
+        return EXIT_SUCCESS;
     }
-#	define popen _popen
-#	define pclose _pclose
+#   define popen _popen
+#   define pclose _pclose
 #endif /*! _WIN32 */
 
 #define TASK_COMPILE    0
@@ -361,7 +361,7 @@ static bool task_template_generate(task_template_t *tmpl, char tag, const char *
     return true;
 }
 
-static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *fp, size_t *pad) {
+static bool task_template_parse(const char *file, task_template_t *tmpl, fs_file_t *fp, size_t *pad) {
     char  *data = NULL;
     char  *back = NULL;
     size_t size = 0;
@@ -371,7 +371,7 @@ static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *f
         return false;
 
     /* top down parsing */
-    while (fs_file_getline(&back, &size, fp) != EOF) {
+    while (fs_file_getline(&back, &size, fp) != FS_FILE_EOF) {
         /* skip whitespace */
         data = back;
         if (*data && (*data == ' ' || *data == '\t'))
@@ -443,9 +443,6 @@ static bool task_template_parse(const char *file, task_template_t *tmpl, FILE *f
                     goto failure;
                 }
 
-                if (value && (*value == ' ' || *value == '\t'))
-                    value++;
-
                 /*
                  * Value will contain a newline character at the end, we need to strip
                  * this otherwise kaboom, seriously, kaboom :P
@@ -505,7 +502,7 @@ static task_template_t *task_template_compile(const char *file, const char *dir,
     /* a page should be enough */
     char             fullfile[4096];
     size_t           filepadd = 0;
-    FILE            *tempfile = NULL;
+    fs_file_t       *tempfile = NULL;
     task_template_t *tmpl     = NULL;
 
     util_snprintf(fullfile,    sizeof(fullfile), "%s/%s", dir, file);
@@ -622,17 +619,17 @@ failure:
     return NULL;
 }
 
-static void task_template_destroy(task_template_t **tmpl) {
+static void task_template_destroy(task_template_t *tmpl) {
     if (!tmpl)
         return;
 
-    if ((*tmpl)->description)    mem_d((*tmpl)->description);
-    if ((*tmpl)->proceduretype)  mem_d((*tmpl)->proceduretype);
-    if ((*tmpl)->compileflags)   mem_d((*tmpl)->compileflags);
-    if ((*tmpl)->executeflags)   mem_d((*tmpl)->executeflags);
-    if ((*tmpl)->sourcefile)     mem_d((*tmpl)->sourcefile);
-    if ((*tmpl)->rulesfile)      mem_d((*tmpl)->rulesfile);
-    if ((*tmpl)->testflags)      mem_d((*tmpl)->testflags);
+    if (tmpl->description)    mem_d(tmpl->description);
+    if (tmpl->proceduretype)  mem_d(tmpl->proceduretype);
+    if (tmpl->compileflags)   mem_d(tmpl->compileflags);
+    if (tmpl->executeflags)   mem_d(tmpl->executeflags);
+    if (tmpl->sourcefile)     mem_d(tmpl->sourcefile);
+    if (tmpl->rulesfile)      mem_d(tmpl->rulesfile);
+    if (tmpl->testflags)      mem_d(tmpl->testflags);
 
     /*
      * Delete all allocated string for task tmpl then destroy the
@@ -640,18 +637,18 @@ static void task_template_destroy(task_template_t **tmpl) {
      */
     {
         size_t i = 0;
-        for (; i < vec_size((*tmpl)->comparematch); i++)
-            mem_d((*tmpl)->comparematch[i]);
+        for (; i < vec_size(tmpl->comparematch); i++)
+            mem_d(tmpl->comparematch[i]);
 
-        vec_free((*tmpl)->comparematch);
+        vec_free(tmpl->comparematch);
     }
 
     /*
      * Nullify all the template members otherwise NULL comparision
      * checks will fail if tmpl pointer is reused.
      */
-    mem_d((*tmpl)->tempfilename);
-    mem_d(*tmpl);
+    mem_d(tmpl->tempfilename);
+    mem_d(tmpl);
 }
 
 /*
@@ -660,9 +657,9 @@ static void task_template_destroy(task_template_t **tmpl) {
  */
 typedef struct {
     task_template_t *tmpl;
-    FILE           **runhandles;
-    FILE            *stderrlog;
-    FILE            *stdoutlog;
+    fs_file_t       **runhandles;
+    fs_file_t       *stderrlog;
+    fs_file_t       *stdoutlog;
     char            *stdoutlogfile;
     char            *stderrlogfile;
     bool             compiled;
@@ -676,8 +673,8 @@ static task_t *task_tasks = NULL;
  */
 static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
     bool             success = true;
-    DIR             *dir;
-    struct dirent   *files;
+    fs_dir_t        *dir;
+    fs_dirent_t     *files;
     struct stat      directory;
     char             buffer[4096];
     size_t           found = 0;
@@ -734,10 +731,9 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
             if (strcmp(files->d_name + strlen(files->d_name) - 5, ".tmpl") == 0) {
                 task_template_t *tmpl = task_template_compile(files->d_name, directories[i], pad);
                 char             buf[4096]; /* one page should be enough */
-                char            *qcflags = NULL;
+                const char      *qcflags = NULL;
                 task_t           task;
 
-                util_debug("TEST", "compiling task template: %s/%s\n", directories[i], files->d_name);
                 found ++;
                 if (!tmpl) {
                     con_err("error compiling task template: %s\n", files->d_name);
@@ -749,23 +745,14 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
                  * so we don't trample over an existing one.
                  */
                 tmpl->tempfilename = NULL;
-                util_asprintf(&tmpl->tempfilename, "%s/TMPDAT.%s", directories[i], files->d_name);
+                util_asprintf(&tmpl->tempfilename, "%s/TMPDAT.%s.dat", directories[i], files->d_name);
 
                 /*
                  * Additional QCFLAGS enviroment variable may be used
                  * to test compile flags for all tests.  This needs to be
                  * BEFORE other flags (so that the .tmpl can override them)
                  */
-                #ifdef _MSC_VER
-                {
-                    char   buffer[4096];
-                    size_t size;
-                    getenv_s(&size, buffer, sizeof(buffer), "QCFLAGS");
-                    qcflags = buffer;
-                }
-                #else
-                qcflags = getenv("QCFLAGS");
-                #endif
+                qcflags = platform_getenv("QCFLAGS");
 
                 /*
                  * Generate the command required to open a pipe to a process
@@ -848,8 +835,6 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
                     continue;
                 }
 
-                util_debug("TEST", "executing test: `%s` [%s]\n", tmpl->description, buf);
-
                 /*
                  * Open up some file desciptors for logging the stdout/stderr
                  * to our own.
@@ -877,11 +862,6 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
     }
     vec_free(directories);
 
-    util_debug("TEST", "compiled %d task template files out of %d\n",
-        vec_size(task_tasks),
-        found
-    );
-
     return success;
 }
 
@@ -890,22 +870,21 @@ static bool task_propagate(const char *curdir, size_t *pad, const char *defs) {
  * left behind from a previous invoke of the test-suite.
  */
 static void task_precleanup(const char *curdir) {
-    DIR             *dir;
-    struct dirent   *files;
-    char             buffer[4096];
+    fs_dir_t     *dir;
+    fs_dirent_t  *files;
+    char          buffer[4096];
 
     dir = fs_dir_open(curdir);
 
     while ((files = fs_dir_read(dir))) {
         if (strstr(files->d_name, "TMP")     ||
             strstr(files->d_name, ".stdout") ||
-            strstr(files->d_name, ".stderr"))
+            strstr(files->d_name, ".stderr") ||
+            strstr(files->d_name, ".dat"))
         {
             util_snprintf(buffer, sizeof(buffer), "%s/%s", curdir, files->d_name);
             if (remove(buffer))
                 con_err("error removing temporary file: %s\n", buffer);
-            else
-                util_debug("TEST", "removed temporary file: %s\n", buffer);
         }
     }
 
@@ -924,7 +903,6 @@ static void task_destroy(void) {
          * Close any open handles to files or processes here.  It's mighty
          * annoying to have to do all this cleanup work.
          */
-        if (task_tasks[i].runhandles) task_pclose(task_tasks[i].runhandles);
         if (task_tasks[i].stdoutlog)  fs_file_close (task_tasks[i].stdoutlog);
         if (task_tasks[i].stderrlog)  fs_file_close (task_tasks[i].stderrlog);
 
@@ -936,12 +914,8 @@ static void task_destroy(void) {
         if (task_tasks[i].compiled || !strcmp(task_tasks[i].tmpl->proceduretype, "-fail")) {
             if (remove(task_tasks[i].stdoutlogfile))
                 con_err("error removing stdout log file: %s\n", task_tasks[i].stdoutlogfile);
-            else
-                util_debug("TEST", "removed stdout log file: %s\n", task_tasks[i].stdoutlogfile);
             if (remove(task_tasks[i].stderrlogfile))
                 con_err("error removing stderr log file: %s\n", task_tasks[i].stderrlogfile);
-            else
-                util_debug("TEST", "removed stderr log file: %s\n", task_tasks[i].stderrlogfile);
 
             (void)!remove(task_tasks[i].tmpl->tempfilename);
         }
@@ -950,7 +924,7 @@ static void task_destroy(void) {
         mem_d(task_tasks[i].stdoutlogfile);
         mem_d(task_tasks[i].stderrlogfile);
 
-        task_template_destroy(&task_tasks[i].tmpl);
+        task_template_destroy(task_tasks[i].tmpl);
     }
     vec_free(task_tasks);
 }
@@ -964,7 +938,8 @@ static void task_destroy(void) {
 static bool task_trymatch(size_t i, char ***line) {
     bool             success = true;
     bool             process = true;
-    FILE            *execute;
+    int              retval  = EXIT_SUCCESS;
+    fs_file_t       *execute;
     char             buffer[4096];
     task_template_t *tmpl = task_tasks[i].tmpl;
 
@@ -988,12 +963,7 @@ static bool task_trymatch(size_t i, char ***line) {
             );
         }
 
-        util_debug("TEST", "executing qcvm: `%s` [%s]\n",
-            tmpl->description,
-            buffer
-        );
-
-        execute = popen(buffer, "r");
+        execute = (fs_file_t*)popen(buffer, "r");
         if (!execute)
             return false;
     } else if (!strcmp(tmpl->proceduretype, "-pp")) {
@@ -1026,7 +996,7 @@ static bool task_trymatch(size_t i, char ***line) {
         size_t size    = 0;
         size_t compare = 0;
 
-        while (fs_file_getline(&data, &size, execute) != EOF) {
+        while (fs_file_getline(&data, &size, execute) != FS_FILE_EOF) {
             if (!strcmp(data, "No main function found\n")) {
                 con_err("test failure: `%s` (No main function found) [%s]\n",
                     tmpl->description,
@@ -1035,7 +1005,7 @@ static bool task_trymatch(size_t i, char ***line) {
                 if (!process)
                     fs_file_close(execute);
                 else
-                    pclose(execute);
+                    pclose((FILE*)execute);
                 return false;
             }
 
@@ -1061,10 +1031,11 @@ static bool task_trymatch(size_t i, char ***line) {
             }
 
             /*
-             * If data is just null now, that means the line was an empty
-             * one and for that, we just ignore it.
+             * We need to ignore null lines for when -pp is used (preprocessor), since
+             * the preprocessor is likely to create empty newlines in certain macro
+             * instantations, otherwise it's in the wrong nature to ignore empty newlines.
              */
-            if (!*data)
+            if (!strcmp(tmpl->proceduretype, "-pp") && !*data)
                 continue;
 
             if (vec_size(tmpl->comparematch) > compare) {
@@ -1085,16 +1056,20 @@ static bool task_trymatch(size_t i, char ***line) {
             data = NULL;
             size = 0;
         }
+
+        if (compare != vec_size(tmpl->comparematch))
+            success = false;
+
         mem_d(data);
         data = NULL;
     }
 
     if (process)
-        pclose(execute);
+        retval = pclose((FILE*)execute);
     else
         fs_file_close(execute);
 
-    return success;
+    return success && retval == EXIT_SUCCESS;
 }
 
 static const char *task_type(task_template_t *tmpl) {
@@ -1134,7 +1109,6 @@ static size_t task_schedualize(size_t *pad) {
 
         con_out("test #%u %*s", i + 1, strlen(space[0]) - strlen(space[1]), "");
 
-        util_debug("TEST", "executing task: %d: %s\n", i, task_tasks[i].tmpl->description);
         /*
          * Generate a task from thin air if it requires execution in
          * the QCVM.
@@ -1155,7 +1129,7 @@ static size_t task_schedualize(size_t *pad) {
          * Read data from stdout first and pipe that stuff into a log file
          * then we do the same for stderr.
          */
-        while (fs_file_getline(&data, &size, task_tasks[i].runhandles[1]) != EOF) {
+        while (fs_file_getline(&data, &size, task_tasks[i].runhandles[1]) != FS_FILE_EOF) {
             fs_file_puts(task_tasks[i].stdoutlog, data);
 
             if (strstr(data, "failed to open file")) {
@@ -1163,7 +1137,7 @@ static size_t task_schedualize(size_t *pad) {
                 execute                = false;
             }
         }
-        while (fs_file_getline(&data, &size, task_tasks[i].runhandles[2]) != EOF) {
+        while (fs_file_getline(&data, &size, task_tasks[i].runhandles[2]) != FS_FILE_EOF) {
             /*
              * If a string contains an error we just dissalow execution
              * of it in the vm.
@@ -1178,7 +1152,7 @@ static size_t task_schedualize(size_t *pad) {
             }
 
             fs_file_puts (task_tasks[i].stderrlog, data);
-            fflush(task_tasks[i].stderrlog); /* fast flush for read */
+            fs_file_flush(task_tasks[i].stderrlog); /* fast flush for read */
         }
 
         if (!task_tasks[i].compiled && strcmp(task_tasks[i].tmpl->proceduretype, "-fail")) {
@@ -1188,6 +1162,18 @@ static size_t task_schedualize(size_t *pad) {
                 task_tasks[i].tmpl->rulesfile,
                 (pad[1] + pad[2] - strlen(task_tasks[i].tmpl->rulesfile)) + (strlen("(failed to compile)") - pad[2]),
                 "(failed to compile)"
+            );
+            failed++;
+            continue;
+        }
+
+        if (task_pclose(task_tasks[i].runhandles) != EXIT_SUCCESS && strcmp(task_tasks[i].tmpl->proceduretype, "-fail")) {
+            con_out("failure:   `%s` %*s %*s\n",
+                task_tasks[i].tmpl->description,
+                (pad[0] + pad[1] - strlen(task_tasks[i].tmpl->description)) + (strlen(task_tasks[i].tmpl->rulesfile) - pad[1]),
+                task_tasks[i].tmpl->rulesfile,
+                (pad[1] + pad[2] - strlen(task_tasks[i].tmpl->rulesfile)) + (strlen("(compiler didn't return exit success)") - pad[2]),
+                "(compiler didn't return exit success)"
             );
             failed++;
             continue;
@@ -1418,7 +1404,6 @@ int main(int argc, char **argv) {
     con_change(redirout, redirerr);
     succeed = test_perform("tests", defs);
     stat_info();
-
 
     return (succeed) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -21,8 +21,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include <time.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -165,6 +163,9 @@ static bool options_parse(int argc, char **argv) {
 
                     opts_set(opts.flags, ADJUST_VECTOR_FIELDS,          true);
                     opts_set(opts.flags, CORRECT_LOGIC,                 true);
+                    opts_set(opts.flags, SHORT_LOGIC,                   true);
+                    opts_set(opts.flags, UNTYPED_NIL,                   true);
+                    opts_set(opts.flags, VARIADIC_ARGS,                 true);
                     opts_set(opts.flags, FALSE_EMPTY_STRINGS,           false);
                     opts_set(opts.flags, TRUE_EMPTY_STRINGS,            true);
                     opts_set(opts.flags, LOOP_LABELS,                   true);
@@ -174,6 +175,7 @@ static bool options_parse(int argc, char **argv) {
                     opts_set(opts.werror, WARN_MISSING_RETURN_VALUES,   true);
                     opts_set(opts.flags,  EXPRESSIONS_FOR_BUILTINS,     true);
                     opts_set(opts.warn,   WARN_BREAKDEF,                true);
+
 
 
                     OPTS_OPTION_U32(OPTION_STANDARD) = COMPILER_GMQCC;
@@ -233,6 +235,10 @@ static bool options_parse(int argc, char **argv) {
             }
             if (options_long_gcc("memdumpcols", &argc, &argv, &memdumpcols)) {
                 OPTS_OPTION_U16(OPTION_MEMDUMPCOLS) = (uint16_t)strtol(memdumpcols, NULL, 10);
+                continue;
+            }
+            if (options_long_gcc("progsrc", &argc, &argv, &argarg)) {
+                OPTS_OPTION_STR(OPTION_PROGSRC) = argarg;
                 continue;
             }
 
@@ -536,7 +542,7 @@ static bool options_parse(int argc, char **argv) {
 }
 
 /* returns the line number, or -1 on error */
-static bool progs_nextline(char **out, size_t *alen,FILE *src) {
+static bool progs_nextline(char **out, size_t *alen, fs_file_t *src) {
     int    len;
     char  *line;
     char  *start;
@@ -564,10 +570,9 @@ static bool progs_nextline(char **out, size_t *alen,FILE *src) {
 int main(int argc, char **argv) {
     size_t          itr;
     int             retval           = 0;
-    bool            opts_output_free = false;
     bool            operators_free   = false;
     bool            progs_src        = false;
-    FILE            *outfile         = NULL;
+    fs_file_t       *outfile         = NULL;
     struct parser_s *parser          = NULL;
     struct ftepp_s  *ftepp           = NULL;
 
@@ -659,8 +664,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    util_debug("COM", "starting ...\n");
-
     /* add macros */
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY) || OPTS_FLAG(FTEPP)) {
         for (itr = 0; itr < vec_size(ppems); itr++) {
@@ -674,16 +677,16 @@ int main(int argc, char **argv) {
     }
 
     if (!vec_size(items)) {
-        FILE  *src;
-        char  *line    = NULL;
-        size_t linelen = 0;
-        bool   hasline = false;
+        fs_file_t *src;
+        char      *line    = NULL;
+        size_t     linelen = 0;
+        bool       hasline = false;
 
         progs_src = true;
 
-        src = fs_file_open("progs.src", "rb");
+        src = fs_file_open(OPTS_OPTION_STR(OPTION_PROGSRC), "rb");
         if (!src) {
-            con_err("failed to open `progs.src` for reading\n");
+            con_err("failed to open `%s` for reading\n", OPTS_OPTION_STR(OPTION_PROGSRC));
             retval = 1;
             goto cleanup;
         }
@@ -699,8 +702,7 @@ int main(int argc, char **argv) {
                 item.type     = TYPE_QC;
                 vec_push(items, item);
             } else if (!opts_output_wasset) {
-                OPTS_OPTION_STR(OPTION_OUTPUT) = util_strdup(line);
-                opts_output_free               = true;
+                OPTS_OPTION_DUP(OPTION_OUTPUT) = util_strdup(line);
                 hasline                        = true;
             }
         }
@@ -781,7 +783,6 @@ int main(int argc, char **argv) {
     }
 
 cleanup:
-    util_debug("COM", "cleaning ...\n");
     if (ftepp)
         ftepp_finish(ftepp);
     con_close();
@@ -790,13 +791,19 @@ cleanup:
 
     if (!OPTS_OPTION_BOOL(OPTION_PP_ONLY))
         if(parser) parser_cleanup(parser);
-    if (opts_output_free)
-        mem_d(OPTS_OPTION_STR(OPTION_OUTPUT));
+
+    /* free allocated option strings */
+    for (itr = 0; itr < OPTION_COUNT; itr++)
+        if (OPTS_OPTION_DUPED(itr))
+            mem_d(OPTS_OPTION_STR(itr));
+
     if (operators_free)
         mem_d((void*)operators);
 
     lex_cleanup();
     stat_info();
 
+    if (!retval && compile_errors)
+        retval = 1;
     return retval;
 }

@@ -248,7 +248,7 @@ static void irerror(lex_ctx_t ctx, const char *msg, ...)
     va_end(ap);
 }
 
-static bool irwarning(lex_ctx_t ctx, int warntype, const char *fmt, ...)
+static bool GMQCC_WARN irwarning(lex_ctx_t ctx, int warntype, const char *fmt, ...)
 {
     bool    r;
     va_list ap;
@@ -312,6 +312,7 @@ static void ir_function_delete_quick(ir_function *self);
 ir_builder* ir_builder_new(const char *modulename)
 {
     ir_builder* self;
+    size_t      i;
 
     self = (ir_builder*)mem_a(sizeof(*self));
     if (!self)
@@ -344,6 +345,15 @@ ir_builder* ir_builder_new(const char *modulename)
     self->nil = ir_value_var("nil", store_value, TYPE_NIL);
     self->nil->cvq = CV_CONST;
 
+    for (i = 0; i != IR_MAX_VINSTR_TEMPS; ++i) {
+        /* we write to them, but they're not supposed to be used outside the IR, so
+         * let's not allow the generation of ir_instrs which use these.
+         * So it's a constant noexpr.
+         */
+        self->vinstr_temp[i] = ir_value_var("vinstr_temp", store_value, TYPE_NOEXPR);
+        self->vinstr_temp[i]->cvq = CV_CONST;
+    }
+
     self->reserved_va_count = NULL;
     self->code              = code_init();
 
@@ -374,6 +384,9 @@ void ir_builder_delete(ir_builder* self)
         ir_value_delete(self->fields[i]);
     }
     ir_value_delete(self->nil);
+    for (i = 0; i != IR_MAX_VINSTR_TEMPS; ++i) {
+        ir_value_delete(self->vinstr_temp[i]);
+    }
     vec_free(self->fields);
     vec_free(self->filenames);
     vec_free(self->filestrings);
@@ -599,7 +612,8 @@ static bool instr_is_operation(uint16_t op)
              (op == INSTR_ADDRESS) ||
              (op >= INSTR_NOT_F  && op <= INSTR_NOT_FNC) ||
              (op >= INSTR_AND    && op <= INSTR_BITOR) ||
-             (op >= INSTR_CALL0  && op <= INSTR_CALL8) );
+             (op >= INSTR_CALL0  && op <= INSTR_CALL8) ||
+             (op >= VINSTR_BITAND_V && op <= VINSTR_NEG_V) );
 }
 
 static bool ir_function_pass_peephole(ir_function *self)
@@ -628,6 +642,7 @@ static bool ir_function_pass_peephole(ir_function *self)
                 if (!instr_is_operation(oper->opcode))
                     continue;
 
+                /* Don't change semantics of MUL_VF in engines where these may not alias. */
                 if (OPTS_FLAG(LEGACY_VECTOR_MATHS)) {
                     if (oper->opcode == INSTR_MUL_VF && oper->_ops[2]->memberof == oper->_ops[1])
                         continue;
@@ -1019,6 +1034,11 @@ static void ir_instr_delete(ir_instr *self)
 
 static bool ir_instr_op(ir_instr *self, int op, ir_value *v, bool writing)
 {
+    if (v && v->vtype == TYPE_NOEXPR) {
+        irerror(self->context, "tried to use a NOEXPR value");
+        return false;
+    }
+
     if (self->_ops[op]) {
         size_t idx;
         if (writing && vec_ir_instr_find(self->_ops[op]->writes, self, &idx))
@@ -1563,7 +1583,13 @@ bool ir_block_create_return(ir_block *self, lex_ctx_t ctx, ir_value *v)
     ir_instr *in;
     if (!ir_check_unreachable(self))
         return false;
+
     self->final = true;
+
+    /* can eliminate the return instructions for accumulation */
+    if (self->owner->flags & IR_FLAG_ACCUMULATE)
+        return true;
+
     self->is_return = true;
     in = ir_instr_new(ctx, self, INSTR_RETURN);
     if (!in)
@@ -1752,6 +1778,7 @@ ir_value* ir_block_create_binop(ir_block *self, lex_ctx_t ctx,
 #endif
         case INSTR_BITAND:
         case INSTR_BITOR:
+        case VINSTR_BITXOR:
 #if 0
         case INSTR_SUB_S: /* -- offset of string as float */
         case INSTR_MUL_IF:
@@ -1788,6 +1815,13 @@ ir_value* ir_block_create_binop(ir_block *self, lex_ctx_t ctx,
         case INSTR_SUB_V:
         case INSTR_MUL_VF:
         case INSTR_MUL_FV:
+        case VINSTR_BITAND_V:
+        case VINSTR_BITOR_V:
+        case VINSTR_BITXOR_V:
+        case VINSTR_BITAND_VF:
+        case VINSTR_BITOR_VF:
+        case VINSTR_BITXOR_VF:
+        case VINSTR_CROSS:
 #if 0
         case INSTR_DIV_VF:
         case INSTR_MUL_IV:
@@ -1850,16 +1884,20 @@ ir_value* ir_block_create_unary(ir_block *self, lex_ctx_t ctx,
         case INSTR_NOT_V:
         case INSTR_NOT_S:
         case INSTR_NOT_ENT:
-        case INSTR_NOT_FNC:
-#if 0
-        case INSTR_NOT_I:
-#endif
+        case INSTR_NOT_FNC: /*
+        case INSTR_NOT_I:   */
             ot = TYPE_FLOAT;
             break;
-        /* QC doesn't have other unary operations. We expect extensions to fill
-         * the above list, otherwise we assume out-type = in-type, eg for an
-         * unary minus
+
+        /*
+         * Negation for virtual instructions is emulated with 0-value. Thankfully
+         * the operand for 0 already exists so we just source it from here.
          */
+        case VINSTR_NEG_F:
+            return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_F, NULL, operand, ot);
+        case VINSTR_NEG_V:
+            return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_V, NULL, operand, ot);
+
         default:
             ot = operand->vtype;
             break;
@@ -2483,7 +2521,16 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             }
         }
 
-        if (instr->opcode == INSTR_MUL_VF)
+        /* These operations need a special case as they can break when using
+         * same source and destination operand otherwise, as the engine may
+         * read the source multiple times. */
+        if (instr->opcode == INSTR_MUL_VF ||
+            instr->opcode == VINSTR_BITAND_VF ||
+            instr->opcode == VINSTR_BITOR_VF ||
+            instr->opcode == VINSTR_BITXOR ||
+            instr->opcode == VINSTR_BITXOR_VF ||
+            instr->opcode == VINSTR_BITXOR_V ||
+            instr->opcode == VINSTR_CROSS)
         {
             value = instr->_ops[2];
             /* the float source will get an additional lifetime */
@@ -2492,7 +2539,13 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1))
                 *changed = true;
         }
-        else if (instr->opcode == INSTR_MUL_FV || instr->opcode == INSTR_LOAD_V)
+
+        if (instr->opcode == INSTR_MUL_FV ||
+            instr->opcode == INSTR_LOAD_V ||
+            instr->opcode == VINSTR_BITXOR ||
+            instr->opcode == VINSTR_BITXOR_VF ||
+            instr->opcode == VINSTR_BITXOR_V ||
+            instr->opcode == VINSTR_CROSS)
         {
             value = instr->_ops[1];
             /* the float source will get an additional lifetime */
@@ -2748,6 +2801,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
     ir_block *onfalse;
     size_t    stidx;
     size_t    i;
+    int       j;
 
     block->generated = true;
     block->code_start = vec_size(code->statements);
@@ -2774,10 +2828,171 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             stmt.o2.s1 = 0;
             stmt.o3.s1 = 0;
             if (stmt.o1.s1 != 1)
-                code_push_statement(code, &stmt, instr->context.line);
+                code_push_statement(code, &stmt, instr->context);
 
             /* no further instructions can be in this block */
             return true;
+        }
+
+        if (instr->opcode == VINSTR_BITXOR) {
+            stmt.opcode = INSTR_BITOR;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+            stmt.opcode = INSTR_BITAND;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            code_push_statement(code, &stmt, instr->context);
+            stmt.opcode = INSTR_SUB_F;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[0]);
+            stmt.o2.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITAND_V) {
+            stmt.opcode = INSTR_BITAND;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITOR_V) {
+            stmt.opcode = INSTR_BITOR;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o2.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITXOR_V) {
+            for (j = 0; j < 3; ++j) {
+                stmt.opcode = INSTR_BITOR;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]) + j;
+                stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]) + j;
+                code_push_statement(code, &stmt, instr->context);
+                stmt.opcode = INSTR_BITAND;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]) + j;
+                stmt.o3.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]) + j;
+                code_push_statement(code, &stmt, instr->context);
+            }
+            stmt.opcode = INSTR_SUB_V;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[0]);
+            stmt.o2.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITAND_VF) {
+            stmt.opcode = INSTR_BITAND;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITOR_VF) {
+            stmt.opcode = INSTR_BITOR;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]);
+            stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+            ++stmt.o1.s1;
+            ++stmt.o3.s1;
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_BITXOR_VF) {
+            for (j = 0; j < 3; ++j) {
+                stmt.opcode = INSTR_BITOR;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+                stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]) + j;
+                code_push_statement(code, &stmt, instr->context);
+                stmt.opcode = INSTR_BITAND;
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + j;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]);
+                stmt.o3.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]) + j;
+                code_push_statement(code, &stmt, instr->context);
+            }
+            stmt.opcode = INSTR_SUB_V;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[0]);
+            stmt.o2.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
+        }
+
+        if (instr->opcode == VINSTR_CROSS) {
+            stmt.opcode = INSTR_MUL_F;
+            for (j = 0; j < 3; ++j) {
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + (j + 1) % 3;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]) + (j + 2) % 3;
+                stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]) + j;
+                code_push_statement(code, &stmt, instr->context);
+                stmt.o1.s1 = ir_value_code_addr(instr->_ops[1]) + (j + 2) % 3;
+                stmt.o2.s1 = ir_value_code_addr(instr->_ops[2]) + (j + 1) % 3;
+                stmt.o3.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]) + j;
+                code_push_statement(code, &stmt, instr->context);
+            }
+            stmt.opcode = INSTR_SUB_V;
+            stmt.o1.s1 = ir_value_code_addr(instr->_ops[0]);
+            stmt.o2.s1 = ir_value_code_addr(func->owner->vinstr_temp[0]);
+            stmt.o3.s1 = ir_value_code_addr(instr->_ops[0]);
+            code_push_statement(code, &stmt, instr->context);
+
+            /* instruction generated */
+            continue;
         }
 
         if (instr->opcode == VINSTR_COND) {
@@ -2795,13 +3010,13 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 stmt.opcode = INSTR_IF;
                 stmt.o2.s1 = (ontrue->code_start) - vec_size(code->statements);
                 if (stmt.o2.s1 != 1)
-                    code_push_statement(code, &stmt, instr->context.line);
+                    code_push_statement(code, &stmt, instr->context);
             }
             if (onfalse->generated) {
                 stmt.opcode = INSTR_IFNOT;
                 stmt.o2.s1 = (onfalse->code_start) - vec_size(code->statements);
                 if (stmt.o2.s1 != 1)
-                    code_push_statement(code, &stmt, instr->context.line);
+                    code_push_statement(code, &stmt, instr->context);
             }
             if (!ontrue->generated) {
                 if (onfalse->generated)
@@ -2821,7 +3036,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 ontrue = tmp;
             }
             stidx = vec_size(code->statements);
-            code_push_statement(code, &stmt, instr->context.line);
+            code_push_statement(code, &stmt, instr->context);
             /* on false we jump, so add ontrue-path */
             if (!gen_blocks_recursive(code, func, ontrue))
                 return false;
@@ -2853,7 +3068,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 stmt.o2.s1 = 0;
                 stmt.o3.s1 = 0;
                 if (stmt.o1.s1 != 1)
-                    code_push_statement(code, &stmt, instr->context.line);
+                    code_push_statement(code, &stmt, instr->context);
                 return true;
             }
             else if (stidx+2 == vec_size(code->statements) && code->statements[stidx].o2.s1 == 1) {
@@ -2892,7 +3107,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                     stmt.opcode = type_store_instr[param->vtype];
                 stmt.o1.u1 = ir_value_code_addr(param);
                 stmt.o2.u1 = OFS_PARM0 + 3 * p;
-                code_push_statement(code, &stmt, instr->context.line);
+                code_push_statement(code, &stmt, instr->context);
             }
             /* Now handle extparams */
             first = vec_size(instr->params);
@@ -2921,7 +3136,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                     stmt.opcode = type_store_instr[param->vtype];
                 stmt.o1.u1 = ir_value_code_addr(param);
                 stmt.o2.u1 = ir_value_code_addr(targetparam);
-                code_push_statement(code, &stmt, instr->context.line);
+                code_push_statement(code, &stmt, instr->context);
             }
 
             stmt.opcode = INSTR_CALL0 + vec_size(instr->params);
@@ -2930,7 +3145,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             stmt.o1.u1 = ir_value_code_addr(instr->_ops[1]);
             stmt.o2.u1 = 0;
             stmt.o3.u1 = 0;
-            code_push_statement(code, &stmt, instr->context.line);
+            code_push_statement(code, &stmt, instr->context);
 
             retvalue = instr->_ops[0];
             if (retvalue && retvalue->store != store_return &&
@@ -2944,7 +3159,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 stmt.o1.u1 = OFS_RETURN;
                 stmt.o2.u1 = ir_value_code_addr(retvalue);
                 stmt.o3.u1 = 0;
-                code_push_statement(code, &stmt, instr->context.line);
+                code_push_statement(code, &stmt, instr->context);
             }
             continue;
         }
@@ -2993,8 +3208,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 continue;
             }
         }
-
-        code_push_statement(code, &stmt, instr->context.line);
+        code_push_statement(code, &stmt, instr->context);
     }
     return true;
 }
@@ -3031,11 +3245,16 @@ static bool gen_function_code(code_t *code, ir_function *self)
         retst->opcode = INSTR_DONE;
         ++opts_optimizationcount[OPTIM_VOID_RETURN];
     } else {
+        lex_ctx_t last;
+
         stmt.opcode = INSTR_DONE;
-        stmt.o1.u1 = 0;
-        stmt.o2.u1 = 0;
-        stmt.o3.u1 = 0;
-        code_push_statement(code, &stmt, vec_last(code->linenums));
+        stmt.o1.u1  = 0;
+        stmt.o2.u1  = 0;
+        stmt.o3.u1  = 0;
+        last.line   = vec_last(code->linenums);
+        last.column = vec_last(code->columnnums);
+
+        code_push_statement(code, &stmt, last);
     }
     return true;
 }
@@ -3168,7 +3387,7 @@ static bool gen_function_extparam_copy(code_t *code, ir_function *self)
         }
         stmt.o1.u1 = ir_value_code_addr(ep);
         stmt.o2.u1 = ir_value_code_addr(self->locals[i]);
-        code_push_statement(code, &stmt, self->context.line);
+        code_push_statement(code, &stmt, self->context);
     }
 
     return true;
@@ -3193,7 +3412,7 @@ static bool gen_function_varargs_copy(code_t *code, ir_function *self)
         if (i < 8) {
             stmt.o1.u1 = OFS_PARM0 + 3*i;
             stmt.o2.u1 = ir_value_code_addr(self->locals[i]);
-            code_push_statement(code, &stmt, self->context.line);
+            code_push_statement(code, &stmt, self->context);
             continue;
         }
         ext = i - 8;
@@ -3204,7 +3423,7 @@ static bool gen_function_varargs_copy(code_t *code, ir_function *self)
 
         stmt.o1.u1 = ir_value_code_addr(ep);
         stmt.o2.u1 = ir_value_code_addr(self->locals[i]);
-        code_push_statement(code, &stmt, self->context.line);
+        code_push_statement(code, &stmt, self->context);
     }
 
     return true;
@@ -3269,8 +3488,16 @@ static bool gen_global_function_code(ir_builder *ir, ir_value *global)
     irfun = global->constval.vfunc;
     if (!irfun) {
         if (global->cvq == CV_NONE) {
-            irwarning(global->context, WARN_IMPLICIT_FUNCTION_POINTER,
-                      "function `%s` has no body and in QC implicitly becomes a function-pointer", global->name);
+            if (irwarning(global->context, WARN_IMPLICIT_FUNCTION_POINTER,
+                          "function `%s` has no body and in QC implicitly becomes a function-pointer",
+                          global->name))
+            {
+                /* Not bailing out just now. If this happens a lot you don't want to have
+                 * to rerun gmqcc for each such function.
+                 */
+
+                /* return false; */
+            }
         }
         /* this was a function pointer, don't generate code for those */
         return true;
@@ -3278,6 +3505,14 @@ static bool gen_global_function_code(ir_builder *ir, ir_value *global)
 
     if (irfun->builtin)
         return true;
+
+    /*
+     * If there is no definition and the thing is eraseable, we can ignore
+     * outputting the function to begin with.
+     */
+    if (global->flags & IR_FLAG_ERASEABLE && irfun->code_function_def < 0) {
+        return true;
+    }
 
     if (irfun->code_function_def < 0) {
         irerror(irfun->context, "`%s`: IR global wasn't generated, failed to access function-def", irfun->name);
@@ -3379,6 +3614,14 @@ static bool ir_builder_gen_global(ir_builder *self, ir_value *global, bool isloc
     {
         pushdef = true;
 
+        /*
+         * if we're eraseable and the function isn't referenced ignore outputting
+         * the function.
+         */
+        if (global->flags & IR_FLAG_ERASEABLE && vec_size(global->reads) == 0) {
+            return true;
+        }
+
         if (OPTS_OPTIMIZATION(OPTIM_STRIP_CONSTANT_NAMES) &&
             !(global->flags & IR_FLAG_INCLUDE_DEF) &&
             (global->name[0] == '#' || global->cvq == CV_CONST))
@@ -3422,9 +3665,12 @@ static bool ir_builder_gen_global(ir_builder *self, ir_value *global, bool isloc
             /* TODO: same as above but for entity-fields rather than globsl
              */
         }
-        else
-            irwarning(global->context, WARN_VOID_VARIABLES, "unrecognized variable of type void `%s`",
-                      global->name);
+        else if(irwarning(global->context, WARN_VOID_VARIABLES, "unrecognized variable of type void `%s`",
+                          global->name))
+        {
+            /* Not bailing out */
+            /* return false; */
+        }
         /* I'd argue setting it to 0 is sufficient, but maybe some depend on knowing how far
          * the system fields actually go? Though the engine knows this anyway...
          * Maybe this could be an -foption
@@ -3652,6 +3898,14 @@ bool ir_builder_generate(ir_builder *self, const char *filename)
     vec_push(self->code->globals, 0);
     vec_push(self->code->globals, 0);
 
+    /* generate virtual-instruction temps */
+    for (i = 0; i < IR_MAX_VINSTR_TEMPS; ++i) {
+        ir_value_code_setaddr(self->vinstr_temp[i], vec_size(self->code->globals));
+        vec_push(self->code->globals, 0);
+        vec_push(self->code->globals, 0);
+        vec_push(self->code->globals, 0);
+    }
+
     /* generate global temps */
     self->first_common_globaltemp = vec_size(self->code->globals);
     for (i = 0; i < self->max_globaltemps; ++i) {
@@ -3681,11 +3935,16 @@ bool ir_builder_generate(ir_builder *self, const char *filename)
     /* DP errors if the last instruction is not an INSTR_DONE. */
     if (vec_last(self->code->statements).opcode != INSTR_DONE)
     {
+        lex_ctx_t last;
+
         stmt.opcode = INSTR_DONE;
-        stmt.o1.u1 = 0;
-        stmt.o2.u1 = 0;
-        stmt.o3.u1 = 0;
-        code_push_statement(self->code, &stmt, vec_last(self->code->linenums));
+        stmt.o1.u1  = 0;
+        stmt.o2.u1  = 0;
+        stmt.o3.u1  = 0;
+        last.line   = vec_last(self->code->linenums);
+        last.column = vec_last(self->code->columnnums);
+
+        code_push_statement(self->code, &stmt, last);
     }
 
     if (OPTS_OPTION_BOOL(OPTION_PP_ONLY))
@@ -3724,21 +3983,27 @@ bool ir_builder_generate(ir_builder *self, const char *filename)
 
 #define IND_BUFSZ 1024
 
-#ifdef _MSC_VER
-#   define strncat(dst, src, sz) strncat_s(dst, sz, src, _TRUNCATE)
-#endif
-
 static const char *qc_opname(int op)
 {
     if (op < 0) return "<INVALID>";
     if (op < VINSTR_END)
         return util_instr_str[op];
     switch (op) {
-        case VINSTR_END:  return "END";
-        case VINSTR_PHI:  return "PHI";
-        case VINSTR_JUMP: return "JUMP";
-        case VINSTR_COND: return "COND";
-        default:          return "<UNK>";
+        case VINSTR_END:       return "END";
+        case VINSTR_PHI:       return "PHI";
+        case VINSTR_JUMP:      return "JUMP";
+        case VINSTR_COND:      return "COND";
+        case VINSTR_BITXOR:    return "BITXOR";
+        case VINSTR_BITAND_V:  return "BITAND_V";
+        case VINSTR_BITOR_V:   return "BITOR_V";
+        case VINSTR_BITXOR_V:  return "BITXOR_V";
+        case VINSTR_BITAND_VF: return "BITAND_VF";
+        case VINSTR_BITOR_VF:  return "BITOR_VF";
+        case VINSTR_BITXOR_VF: return "BITXOR_VF";
+        case VINSTR_CROSS:     return "CROSS";
+        case VINSTR_NEG_F:     return "NEG_F";
+        case VINSTR_NEG_V:     return "NEG_V";
+        default:               return "<UNK>";
     }
 }
 
@@ -3776,7 +4041,7 @@ void ir_function_dump(ir_function *f, char *ind,
         return;
     }
     oprintf("%sfunction %s\n", ind, f->name);
-    strncat(ind, "\t", IND_BUFSZ-1);
+    util_strncat(ind, "\t", IND_BUFSZ-1);
     if (vec_size(f->locals))
     {
         oprintf("%s%i locals:\n", ind, (int)vec_size(f->locals));
@@ -3872,7 +4137,7 @@ void ir_block_dump(ir_block* b, char *ind,
 {
     size_t i;
     oprintf("%s:%s\n", ind, b->label);
-    strncat(ind, "\t", IND_BUFSZ-1);
+    util_strncat(ind, "\t", IND_BUFSZ-1);
 
     if (b->instr && b->instr[0])
         oprintf("%s (%i) [entry]\n", ind, (int)(b->instr[0]->eid-1));
@@ -3906,7 +4171,7 @@ void ir_instr_dump(ir_instr *in, char *ind,
         return;
     }
 
-    strncat(ind, "\t", IND_BUFSZ-1);
+    util_strncat(ind, "\t", IND_BUFSZ-1);
 
     if (in->_ops[0] && (in->_ops[1] || in->_ops[2])) {
         ir_value_dump(in->_ops[0], oprintf);

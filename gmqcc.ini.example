@@ -31,7 +31,7 @@
     #write a ticket.
 
     FTEPP = true
-    
+
 
     #Enable some predefined macros. This only works in combination
     #with '-fftepp' and is currently not included by '-std=fteqcc'.
@@ -273,6 +273,21 @@
     UNSAFE_VARARGS = false
 
 
+    #Always use STORE_F, LOAD_F, STOREP_F when accessing scalar variables.
+    #This is somewhat incorrect assembly instruction use, but in all engines
+    #they do exactly the same. This makes disassembly output harder to read,
+    #breaks decompilers, but causes the output file to be better compressible.
+
+    TYPELESS_STORES = false
+
+
+    #In commutative instructions, always put the lower-numbered operand first.
+    #This shaves off 1 byte of entropy from all these instructions, reducing
+    #compressed size of the output file.
+
+    SORT_OPERANDS = false
+
+
 
 [warnings]
     #Generate a warning about variables which are declared but never
@@ -501,12 +516,27 @@
     UNSAFE_TYPES = true
 
 
-    #When compiling original id1 QC, there is a definition for `break`
+    #When compiling original id1 QC there is a definition for `break`
     #which conflicts with the 'break' keyword in GMQCC. Enabling this
-    #warning will print a warning when the definition occurs. The
-    #definition is ignored for both cases.
+    #print a warning when the definition occurs. The definition is
+    #ignored for both cases.
 
     BREAKDEF = true
+
+
+    #When compiling original QuakeWorld QC there are instances where
+    #code overwrites constants. This is considered an error, however
+    #for QuakeWorld to compile it needs to be treated as a warning
+    #instead, as such this warning only works when -std=qcc.
+
+    CONST_OVERWRITE = true
+
+
+    #Warn about the use of preprocessor directives inside macros.
+
+    DIRECTIVE_INMACRO = true
+
+
 
 [optimizations]
     #Some general peephole optimizations. For instance the code `a = b
@@ -538,7 +568,6 @@
     OVERLAP_LOCALS = true
 
 
-
     #This promotes locally declared variables to "temps". Meaning when
     #a temporary result of an operation has to be stored somewhere, a
     #local variable which is not 'alive' at that point can be used to
@@ -548,7 +577,7 @@
 
     LOCAL_TEMPS = true
 
- 
+
     #Causes temporary values which do not need to be backed up on a
     #CALL to not be stored in the function's locals-area. With this, a
     #CALL to a function may need to back up fewer values and thus exe‐
@@ -620,6 +649,7 @@
     #more optimal code.
 
     CONST_FOLD_DCE = true
+
 
     #For constant expressions we can fold them to immediate values.
     #this option cannot be disabled or enabled, the compiler forces

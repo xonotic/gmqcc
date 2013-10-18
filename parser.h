@@ -43,10 +43,12 @@ typedef struct {
     ast_expression *(*intrin)(intrin_t *);
     const char       *name;
     const char       *alias;
+    size_t            args;
 } intrin_func_t;
 
 struct intrin_s {
-    intrin_func_t  *intrinsics;              /* vector<intrin_func_t> */
+    intrin_func_t  *intrinsics;              /* vector<intrin_func_t>   */
+    ast_expression **generated;              /* vector<ast_expression*> */
     parser_t       *parser;
     fold_t         *fold;
 };
@@ -129,13 +131,17 @@ ast_expression *fold_constgen_float (fold_t *, qcfloat_t);
 ast_expression *fold_constgen_vector(fold_t *, vec3_t);
 ast_expression *fold_constgen_string(fold_t *, const char *, bool);
 bool            fold_generate       (fold_t *, ir_builder *);
-ast_expression *fold_op             (fold_t *, const oper_info *, ast_expression**);
+ast_expression *fold_op             (fold_t *, const oper_info *, ast_expression **);
+ast_expression *fold_intrin         (fold_t *, const char      *, ast_expression **);
 
-int             fold_cond           (ir_value *, ast_function *, ast_ifthen *);
+ast_expression *fold_superfluous    (ast_expression *, ast_expression *, int);
+int             fold_cond_ifthen    (ir_value *, ast_function *, ast_ifthen  *);
+int             fold_cond_ternary   (ir_value *, ast_function *, ast_ternary *);
 
 /* intrin.c */
 intrin_t       *intrin_init            (parser_t *parser);
 void            intrin_cleanup         (intrin_t *intrin);
+ast_expression *intrin_fold            (intrin_t *intrin, ast_value *, ast_expression **);
 ast_expression *intrin_func            (intrin_t *intrin, const char *name);
 ast_expression *intrin_debug_typestring(intrin_t *intrin);
 

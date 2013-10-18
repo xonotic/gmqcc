@@ -82,11 +82,8 @@ endif
 endif
 
 #standard rules
-%.o: %.c
-	$(CC) -c $< -o $@ $(CFLAGS) $(CPPFLAGS) 
-
-exec-standalone.o: exec.c
-	$(CC) -c $< -o $@ $(CFLAGS) $(CPPFLAGS) -DQCVM_EXECUTOR=1
+c.o:
+	$(CC) -c $< -o $@ $(CFLAGS) $(CPPFLAGS)
 
 $(QCVM): $(OBJ_X)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
@@ -107,17 +104,13 @@ check: all
 test: all
 	@ ./$(TESTSUITE)
 
+strip: $(GMQCC) $(QCVM) $(TESTSUITE)
+	strip $(GMQCC)
+	strip $(QCVM)
+	strip $(TESTSUITE)
+
 clean:
 	rm -rf *.o $(GMQCC) $(QCVM) $(TESTSUITE) $(PAK) *.dat gource.mp4 *.exe gm-qcc.tgz ./cov-int
-
-splint:
-	@  splint $(SPLINTFLAGS) *.c *.h
-
-gource:
-	@ gource $(GOURCEFLAGS)
-
-gource-record:
-	@ gource $(GOURCEFLAGS) -o - | ffmpeg $(FFMPEGFLAGS) gource.mp4
 
 depend:
 	@ makedepend -Y -w 65536 2> /dev/null $(subst .o,.c,$(DEPS))
@@ -148,13 +141,14 @@ install-doc:
 
 # DO NOT DELETE
 
-util.o: gmqcc.h opts.def
-fs.o: gmqcc.h opts.def
-conout.o: gmqcc.h opts.def
-opts.o: gmqcc.h opts.def
-pak.o: gmqcc.h opts.def
+ansi.o: platform.h gmqcc.h opts.def
+util.o: gmqcc.h opts.def platform.h
 stat.o: gmqcc.h opts.def
-test.o: gmqcc.h opts.def
+fs.o: gmqcc.h opts.def platform.h
+opts.o: gmqcc.h opts.def
+conout.o: gmqcc.h opts.def
+pak.o: gmqcc.h opts.def
+test.o: gmqcc.h opts.def platform.h
 main.o: gmqcc.h opts.def lexer.h
 lexer.o: gmqcc.h opts.def lexer.h
 parser.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h
@@ -166,3 +160,5 @@ utf8.o: gmqcc.h opts.def
 correct.o: gmqcc.h opts.def
 thread.o: gmqcc.h opts.def
 fold.o: ast.h ir.h gmqcc.h opts.def parser.h lexer.h
+intrin.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h
+exec.o: gmqcc.h opts.def

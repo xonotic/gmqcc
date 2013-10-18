@@ -49,11 +49,8 @@ TESTSUITE = testsuite
 PAK       = gmqpak
 
 #standard rules
-c.o: ${.IMPSRC} 
-	$(CC) -c ${.IMPSRC} -o ${.TARGET} $(CFLAGS) $(CPPFLAGS) 
-
-exec-standalone.o: exec.c
-	$(CC) -c ${.ALLSRC} -o ${.TARGET} $(CFLAGS) $(CPPFLAGS) -DQCVM_EXECUTOR=1
+c.o: ${.IMPSRC}
+	$(CC) -c ${.IMPSRC} -o ${.TARGET} $(CFLAGS) $(CPPFLAGS)
 
 $(QCVM): $(OBJ_X)
 	$(CC) -o ${.TARGET} ${.IMPSRC} $(LDFLAGS) $(LIBS) $(OBJ_X)
@@ -74,17 +71,13 @@ check: all
 test: all
 	@ ./$(TESTSUITE)
 
+strip: $(GMQCC) $(QCVM) $(TESTSUITE)
+	strip $(GMQCC)
+	strip $(QCVM)
+	strip $(TESTSUITE)
+
 clean:
 	rm -rf *.o $(GMQCC) $(QCVM) $(TESTSUITE) $(PAK) *.dat gource.mp4 *.exe gm-qcc.tgz ./cov-int
-
-splint:
-	@ splint $(SPLINTFLAGS) *.c *.h
-
-gource:
-	@ gource $(GOURCEFLAGS)
-
-gource-record:
-	@ gource $(GOURCEFLAGS) -o - | ffmpeg $(FFMPEGFLAGS) gource.mp4
 
 depend:
 	@makedepend -Y -f BSDmakefile -w 65536 2> /dev/null ${DEPS:C/\.o/.c/g}
@@ -113,20 +106,23 @@ install-doc:
 
 # DO NOT DELETE
 
-util.o: gmqcc.h opts.def
-fs.o: gmqcc.h opts.def
+ansi.o: platform.h gmqcc.h opts.def
+ast.o: gmqcc.h opts.def ast.h ir.h parser.h lexer.h
+code.o: gmqcc.h opts.def
 conout.o: gmqcc.h opts.def
+correct.o: gmqcc.h opts.def
+exec.o: gmqcc.h opts.def
+fold.o: ast.h ir.h gmqcc.h opts.def parser.h lexer.h
+fs.o: gmqcc.h opts.def platform.h
+ftepp.o: gmqcc.h opts.def lexer.h
+intrin.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h
+ir.o: gmqcc.h opts.def ir.h
+lexer.o: gmqcc.h opts.def lexer.h
+main.o: gmqcc.h opts.def lexer.h
 opts.o: gmqcc.h opts.def
 pak.o: gmqcc.h opts.def
-stat.o: gmqcc.h opts.def
-test.o: gmqcc.h opts.def
-main.o: gmqcc.h opts.def lexer.h
-lexer.o: gmqcc.h opts.def lexer.h
 parser.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h
-code.o: gmqcc.h opts.def
-ast.o: gmqcc.h opts.def ast.h ir.h parser.h lexer.h
-ir.o: gmqcc.h opts.def ir.h
-ftepp.o: gmqcc.h opts.def lexer.h
+stat.o: gmqcc.h opts.def
+test.o: gmqcc.h opts.def platform.h
 utf8.o: gmqcc.h opts.def
-correct.o: gmqcc.h opts.def
-fold.o: ast.h ir.h gmqcc.h opts.def parser.h lexer.h
+util.o: gmqcc.h opts.def platform.h

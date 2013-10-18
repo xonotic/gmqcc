@@ -30,10 +30,10 @@ struct token_s {
     char *value;
 
     union {
-        vec3_t v;
-        int    i;
-        double f;
-        int    t; /* type */
+        vec3_t    v;
+        int       i;
+        qcfloat_t f;
+        int       t; /* type */
     } constval;
 
 #if 0
@@ -105,7 +105,7 @@ typedef struct {
 } frame_macro;
 
 typedef struct lex_file_s {
-    FILE   *file;
+    fs_file_t  *file;
     const char *open_string;
     size_t      open_string_length;
     size_t      open_string_pos;
@@ -196,6 +196,7 @@ static const oper_info c_operators[] = {
     { "*",   2, opid1('*'),         ASSOC_LEFT,  13, 0,         true},
     { "/",   2, opid1('/'),         ASSOC_LEFT,  13, 0,         true},
     { "%",   2, opid1('%'),         ASSOC_LEFT,  13, 0,         true},
+    { "><",  2, opid2('>','<'),     ASSOC_LEFT,  13, 0,         true},
 
     { "+",   2, opid1('+'),         ASSOC_LEFT,  12, 0,         true},
     { "-",   2, opid1('-'),         ASSOC_LEFT,  12, 0,         true},
@@ -235,7 +236,6 @@ static const oper_info c_operators[] = {
     { "&=",  2, opid2('&','='),     ASSOC_RIGHT, 2,  0,         false},
     { "^=",  2, opid2('^','='),     ASSOC_RIGHT, 2,  0,         false},
     { "|=",  2, opid2('|','='),     ASSOC_RIGHT, 2,  0,         false},
-    { "&~=", 2, opid3('&','~','='), ASSOC_RIGHT, 2,  0,         false},
 
     { ":",   0, opid2(':','?'),     ASSOC_RIGHT, 1,  0,         false},
 

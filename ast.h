@@ -155,10 +155,14 @@ struct ast_expression_common
 #define AST_FLAG_INCLUDE_DEF  (1<<5)
 #define AST_FLAG_IS_VARARG    (1<<6)
 #define AST_FLAG_ALIAS        (1<<7)
-/* An array declared as []
- * so that the size is taken from the initializer */
-#define AST_FLAG_ARRAY_INIT   (1<<8)
-#define AST_FLAG_TYPE_MASK (AST_FLAG_VARIADIC | AST_FLAG_NORETURN)
+#define AST_FLAG_ERASEABLE    (1<<8)
+#define AST_FLAG_ACCUMULATE   (1<<9)
+/*
+ * An array declared as []
+ * so that the size is taken from the initializer
+ */
+#define AST_FLAG_ARRAY_INIT   (1<<10)
+#define AST_FLAG_TYPE_MASK    (AST_FLAG_VARIADIC | AST_FLAG_NORETURN)
 
 /* Value
  *
@@ -168,7 +172,7 @@ struct ast_expression_common
  * is like creating a 'float foo', foo serving as the type's name.
  */
 typedef union {
-    double        vfloat;
+    qcfloat_t     vfloat;
     int           vint;
     vec3_t        vvec;
     const char   *vstring;
@@ -207,6 +211,9 @@ struct ast_value_s
     /* ONLY for arrays in progs version up to 6 */
     ast_value *setter;
     ast_value *getter;
+
+
+    bool      intrinsic; /* true if associated with intrinsic */
 };
 
 ast_value* ast_value_new(lex_ctx_t ctx, const char *name, int qctype);
@@ -251,7 +258,7 @@ struct ast_binary_s
     ast_expression *left;
     ast_expression *right;
     ast_binary_ref  refs;
-
+    bool            right_first;
 };
 ast_binary* ast_binary_new(lex_ctx_t    ctx,
                            int        op,
@@ -609,6 +616,10 @@ struct ast_function_s
     const char *name;
 
     int builtin;
+
+    /* function accumulation */
+    ast_function *accumulate;    /* pointer to the next function in the chain */
+    size_t        accumulation;  /* base functions # of accumulations         */
 
     ir_function *ir_func;
     ir_block    *curblock;

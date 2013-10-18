@@ -60,6 +60,7 @@ opts_cmd_t   opts; /* command line options */
 static void opts_setdefault(void) {
     memset(&opts, 0, sizeof(opts_cmd_t));
     OPTS_OPTION_BOOL(OPTION_CORRECTION) = true;
+    OPTS_OPTION_STR(OPTION_PROGSRC)     = "progs.src";
 
     /* warnings */
     opts_set(opts.warn,  WARN_UNUSED_VARIABLE,           true);
@@ -89,6 +90,8 @@ static void opts_setdefault(void) {
     opts_set(opts.warn,  WARN_UNINITIALIZED_CONSTANT,    true);
     opts_set(opts.warn,  WARN_DEPRECATED,                true);
     opts_set(opts.warn,  WARN_PARENTHESIS,               true);
+    opts_set(opts.warn,  WARN_CONST_OVERWRITE,           true);
+    opts_set(opts.warn,  WARN_DIRECTIVE_INMACRO,         true);
 
     /* flags */
     opts_set(opts.flags, ADJUST_VECTOR_FIELDS,           true);
@@ -126,7 +129,7 @@ void opts_restore_non_Werror_all() {
 void opts_init(const char *output, int standard, size_t arraysize) {
     opts_setdefault();
 
-    OPTS_OPTION_STR(OPTION_OUTPUT)         = (char*)output;
+    OPTS_OPTION_STR(OPTION_OUTPUT)         = output;
     OPTS_OPTION_U32(OPTION_STANDARD)       = standard;
     OPTS_OPTION_U32(OPTION_MAX_ARRAY_SIZE) = arraysize;
     OPTS_OPTION_U16(OPTION_MEMDUMPCOLS)    = 16;
@@ -211,7 +214,7 @@ static char *opts_ini_next(const char *s, char c) {
 }
 
 static size_t opts_ini_parse (
-    FILE   *filehandle,
+    fs_file_t *filehandle,
     char *(*loadhandle)(const char *, const char *, const char *),
     char **errorhandle
 ) {
@@ -228,7 +231,7 @@ static size_t opts_ini_parse (
     char *read_name;
     char *read_value;
 
-    while (fs_file_getline(&line, &linesize, filehandle) != EOF) {
+    while (fs_file_getline(&line, &linesize, filehandle) != FS_FILE_EOF) {
         parse_beg = line;
 
         /* handle BOM */
@@ -378,7 +381,7 @@ void opts_ini_init(const char *file) {
      */
     char       *error = NULL;
     size_t     line;
-    FILE       *ini;
+    fs_file_t  *ini;
 
     if (!file) {
         /* try ini */

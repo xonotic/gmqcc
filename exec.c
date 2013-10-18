@@ -23,14 +23,12 @@
  */
 #ifndef QCVM_LOOP
 #include <errno.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdarg.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 #include "gmqcc.h"
 
-opts_cmd_t   opts; /* command line options */
 static void loaderror(const char *fmt, ...)
 {
     int     err = errno;
@@ -55,9 +53,9 @@ static void qcvmerror(qc_program_t *prog, const char *fmt, ...)
 
 qc_program_t* prog_load(const char *filename, bool skipversion)
 {
-    qc_program_t   *prog;
     prog_header_t   header;
-    FILE         *file  = fs_file_open(filename, "rb");
+    qc_program_t   *prog;
+    fs_file_t      *file  = fs_file_open(filename, "rb");
 
     if (!file)
         return NULL;
@@ -92,11 +90,11 @@ qc_program_t* prog_load(const char *filename, bool skipversion)
     }
 
 #define read_data(hdrvar, progvar, reserved)                           \
-    if (fs_file_seek(file, header.hdrvar.offset, SEEK_SET) != 0) {        \
+    if (fs_file_seek(file, header.hdrvar.offset, SEEK_SET) != 0) {     \
         loaderror("seek failed");                                      \
         goto error;                                                    \
     }                                                                  \
-    if (fs_file_read (                                                    \
+    if (fs_file_read (                                                 \
             vec_add(prog->progvar, header.hdrvar.length + reserved),   \
             sizeof(*prog->progvar),                                    \
             header.hdrvar.length,                                      \
@@ -353,7 +351,7 @@ static void trace_print_global(qc_program_t *prog, unsigned int glob, int vtype)
 done:
     if (len < (int)sizeof(spaces)-1) {
         spaces[sizeof(spaces)-1-len] = 0;
-        fs_file_puts(stdout, spaces);
+        fs_file_puts((fs_file_t*)stdout, spaces);
         spaces[sizeof(spaces)-1-len] = ' ';
     }
 }
@@ -589,7 +587,6 @@ cleanup:
  * main for when building the standalone executor
  */
 
-#if defined(QCVM_EXECUTOR)
 #include <math.h>
 
 const char *type_name[TYPE_COUNT] = {
@@ -878,17 +875,10 @@ static void prog_main_setparams(qc_program_t *prog) {
         arg->vector[2] = 0;
         switch (main_params[i].vtype) {
             case TYPE_VECTOR:
-#ifdef _MSC_VER
-                (void)sscanf_s(main_params[i].value, " %f %f %f ",
-                               &arg->vector[0],
-                               &arg->vector[1],
-                               &arg->vector[2]);
-#else
-                (void)sscanf(main_params[i].value, " %f %f %f ",
-                             &arg->vector[0],
-                             &arg->vector[1],
-                             &arg->vector[2]);
-#endif
+                (void)util_sscanf(main_params[i].value, " %f %f %f ",
+                                       &arg->vector[0],
+                                       &arg->vector[1],
+                                       &arg->vector[2]);
                 break;
             case TYPE_FLOAT:
                 arg->_float = atof(main_params[i].value);
@@ -924,7 +914,7 @@ int main(int argc, char **argv) {
 
     if (argc < 2) {
         usage();
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     while (argc > 1) {
@@ -933,7 +923,7 @@ int main(int argc, char **argv) {
             !strcmp(argv[1], "--help"))
         {
             usage();
-            exit(0);
+            exit(EXIT_SUCCESS);
         }
         else if (!strcmp(argv[1], "-v")) {
             ++opts_v;
@@ -947,7 +937,7 @@ int main(int argc, char **argv) {
                     ++opts_v;
                 else {
                     usage();
-                    exit(1);
+                    exit(EXIT_FAILURE);
                 }
             }
             --argc;
@@ -957,7 +947,7 @@ int main(int argc, char **argv) {
                  !strcmp(argv[1], "--version"))
         {
             version();
-            exit(0);
+            exit(EXIT_SUCCESS);
         }
         else if (!strcmp(argv[1], "-trace")) {
             --argc;
@@ -986,7 +976,7 @@ int main(int argc, char **argv) {
             ++argv;
             if (argc <= 1) {
                 usage();
-                exit(1);
+                exit(EXIT_FAILURE);
             }
             vec_push(dis_list, argv[1]);
             --argc;
@@ -1029,7 +1019,7 @@ int main(int argc, char **argv) {
             ++argv;
             if (argc < 2) {
                 usage();
-                exit(1);
+                exit(EXIT_FAILURE);
             }
             p.value = argv[1];
 
@@ -1046,7 +1036,7 @@ int main(int argc, char **argv) {
             if (progsfile) {
                 fprintf(stderr, "only 1 program file may be specified\n");
                 usage();
-                exit(1);
+                exit(EXIT_FAILURE);
             }
             progsfile = argv[1];
             --argc;
@@ -1056,7 +1046,7 @@ int main(int argc, char **argv) {
         {
             fprintf(stderr, "unknown parameter: %s\n", argv[1]);
             usage();
-            exit(1);
+            exit(EXIT_FAILURE);
         }
     }
 
@@ -1069,13 +1059,13 @@ int main(int argc, char **argv) {
     if (!progsfile) {
         fprintf(stderr, "must specify a program to execute\n");
         usage();
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     prog = prog_load(progsfile, noexec);
     if (!prog) {
         fprintf(stderr, "failed to load program '%s'\n", progsfile);
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     prog->builtins       = qc_builtins;
@@ -1165,7 +1155,7 @@ int main(int argc, char **argv) {
     if (opts_printfuns) {
         for (i = 0; i < vec_size(prog->functions); ++i) {
             int32_t a;
-            printf("Function: %-16s taking %i parameters:(",
+            printf("Function: %-16s taking %u parameters:(",
                    prog_getstring(prog, prog->functions[i].name),
                    (unsigned int)prog->functions[i].nargs);
             for (a = 0; a < prog->functions[i].nargs; ++a) {
@@ -1235,7 +1225,6 @@ void prog_disasm_function(qc_program_t *prog, size_t id) {
         ++st;
     }
 }
-#endif
 #else /* !QCVM_LOOP */
 /*
  * Everything from here on is not including into the compilation of the
@@ -1256,7 +1245,7 @@ void prog_disasm_function(qc_program_t *prog, size_t id) {
 #   define FLOAT_IS_TRUE_FOR_INT(x) ( (x) & 0x7FFFFFFF )
 #endif
 
-while (1) {
+while (prog->vmerror == 0) {
     prog_section_function_t  *newf;
     qcany_t          *ed;
     qcany_t          *ptr;

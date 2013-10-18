@@ -369,7 +369,8 @@ ast_value* ast_value_new(lex_ctx_t ctx, const char *name, int t)
     self->getter = NULL;
     self->desc   = NULL;
 
-    self->argcounter  = NULL;
+    self->argcounter = NULL;
+    self->intrinsic = false;
 
     return self;
 }
@@ -437,15 +438,22 @@ bool ast_value_set_name(ast_value *self, const char *name)
 ast_binary* ast_binary_new(lex_ctx_t ctx, int op,
                            ast_expression* left, ast_expression* right)
 {
+    ast_binary *fold;
     ast_instantiate(ast_binary, ctx, ast_binary_delete);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_binary_codegen);
 
     self->op = op;
     self->left = left;
     self->right = right;
+    self->right_first = false;
 
     ast_propagate_effects(self, left);
     ast_propagate_effects(self, right);
+
+    if (OPTS_OPTIMIZATION(OPTIM_PEEPHOLE) && (fold = (ast_binary*)fold_superfluous(left, right, op))) {
+        ast_binary_delete(self);
+        return fold;
+    }
 
     if (op >= INSTR_EQ_F && op <= INSTR_GT)
         self->expression.vtype = TYPE_FLOAT;
@@ -513,15 +521,34 @@ ast_unary* ast_unary_new(lex_ctx_t ctx, int op,
     ast_instantiate(ast_unary, ctx, ast_unary_delete);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_unary_codegen);
 
-    self->op = op;
+    self->op      = op;
     self->operand = expr;
+
+
+    if (ast_istype(expr, ast_unary) && OPTS_OPTIMIZATION(OPTIM_PEEPHOLE)) {
+        ast_unary *prev = (ast_unary*)((ast_unary*)expr)->operand;
+
+        /* Handle for double negation */
+        if (((ast_unary*)expr)->op == op)
+            prev = (ast_unary*)((ast_unary*)expr)->operand;
+
+        if (ast_istype(prev, ast_unary)) {
+            ast_expression_delete((ast_expression*)self);
+            mem_d(self);
+            ++opts_optimizationcount[OPTIM_PEEPHOLE];
+            return prev;
+        }
+    }
 
     ast_propagate_effects(self, expr);
 
-    if (op >= INSTR_NOT_F && op <= INSTR_NOT_FNC) {
+    if ((op >= INSTR_NOT_F && op <= INSTR_NOT_FNC) || op == VINSTR_NEG_F) {
         self->expression.vtype = TYPE_FLOAT;
-    } else
+    } else if (op == VINSTR_NEG_V) {
+        self->expression.vtype = TYPE_VECTOR;
+    } else {
         compile_error(ctx, "cannot determine type of unary operation %s", util_instr_str[op]);
+    }
 
     return self;
 }
@@ -1157,6 +1184,7 @@ ast_function* ast_function_new(lex_ctx_t ctx, const char *name, ast_value *vtype
         compile_error(ast_ctx(self), "internal error: ast_function_new condition 0");
         goto cleanup;
     } else if (vtype->hasvalue || vtype->expression.vtype != TYPE_FUNCTION) {
+    } else if (vtype->hasvalue || vtype->expression.vtype != TYPE_FUNCTION) {
         compile_error(ast_ctx(self), "internal error: ast_function_new condition %i %i type=%i (probably 2 bodies?)",
                  (int)!vtype,
                  (int)vtype->hasvalue,
@@ -1184,6 +1212,9 @@ ast_function* ast_function_new(lex_ctx_t ctx, const char *name, ast_value *vtype
     self->argc             = NULL;
     self->fixedparams      = NULL;
     self->return_value     = NULL;
+
+    self->accumulate   = NULL;
+    self->accumulation = 0;
 
     return self;
 
@@ -1348,6 +1379,20 @@ static bool ast_global_array_set(ast_value *self)
     return true;
 }
 
+static bool check_array(ast_value *self, ast_value *array)
+{
+    if (array->expression.flags & AST_FLAG_ARRAY_INIT && !array->initlist) {
+        compile_error(ast_ctx(self), "array without size: %s", self->name);
+        return false;
+    }
+    /* we are lame now - considering the way QC works we won't tolerate arrays > 1024 elements */
+    if (!array->expression.count || array->expression.count > OPTS_OPTION_U32(OPTION_MAX_ARRAY_SIZE)) {
+        compile_error(ast_ctx(self), "Invalid array of size %lu", (unsigned long)array->expression.count);
+        return false;
+    }
+    return true;
+}
+
 bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
 {
     ir_value *v = NULL;
@@ -1369,6 +1414,8 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
         self->ir_v = func->value;
         if (self->expression.flags & AST_FLAG_INCLUDE_DEF)
             self->ir_v->flags |= IR_FLAG_INCLUDE_DEF;
+        if (self->expression.flags & AST_FLAG_ERASEABLE)
+            self->ir_v->flags |= IR_FLAG_ERASEABLE;
         /* The function is filled later on ast_function_codegen... */
         return true;
     }
@@ -1395,9 +1442,8 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
                 return false;
             }
 
-            /* we are lame now - considering the way QC works we won't tolerate arrays > 1024 elements */
-            if (!array->expression.count || array->expression.count > OPTS_OPTION_U32(OPTION_MAX_ARRAY_SIZE))
-                compile_error(ast_ctx(self), "Invalid array of size %lu", (unsigned long)array->expression.count);
+            if (!check_array(self, array))
+                return false;
 
             elemtype = array->expression.next;
             vtype = elemtype->vtype;
@@ -1411,8 +1457,11 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
             v->unique_life = true;
             v->locked      = true;
             array->ir_v = self->ir_v = v;
+
             if (self->expression.flags & AST_FLAG_INCLUDE_DEF)
                 self->ir_v->flags |= IR_FLAG_INCLUDE_DEF;
+            if (self->expression.flags & AST_FLAG_ERASEABLE)
+                self->ir_v->flags |= IR_FLAG_ERASEABLE;
 
             namelen = strlen(self->name);
             name    = (char*)mem_a(namelen + 16);
@@ -1445,6 +1494,9 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
             self->ir_v = v;
             if (self->expression.flags & AST_FLAG_INCLUDE_DEF)
                 self->ir_v->flags |= IR_FLAG_INCLUDE_DEF;
+
+            if (self->expression.flags & AST_FLAG_ERASEABLE)
+                self->ir_v->flags |= IR_FLAG_ERASEABLE;
         }
         return true;
     }
@@ -1463,8 +1515,8 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
         }
 
         /* same as with field arrays */
-        if (!self->expression.count || self->expression.count > OPTS_OPTION_U32(OPTION_MAX_ARRAY_SIZE))
-            compile_error(ast_ctx(self), "Invalid array of size %lu", (unsigned long)self->expression.count);
+        if (!check_array(self, self))
+            return false;
 
         v = ir_builder_create_global(ir, self->name, vtype);
         if (!v) {
@@ -1474,8 +1526,11 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
         v->context = ast_ctx(self);
         v->unique_life = true;
         v->locked      = true;
+
         if (self->expression.flags & AST_FLAG_INCLUDE_DEF)
             v->flags |= IR_FLAG_INCLUDE_DEF;
+        if (self->expression.flags & AST_FLAG_ERASEABLE)
+            self->ir_v->flags |= IR_FLAG_ERASEABLE;
 
         namelen = strlen(self->name);
         name    = (char*)mem_a(namelen + 16);
@@ -1516,8 +1571,11 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
     /* link us to the ir_value */
     v->cvq = self->cvq;
     self->ir_v = v;
+
     if (self->expression.flags & AST_FLAG_INCLUDE_DEF)
         self->ir_v->flags |= IR_FLAG_INCLUDE_DEF;
+    if (self->expression.flags & AST_FLAG_ERASEABLE)
+        self->ir_v->flags |= IR_FLAG_ERASEABLE;
 
     /* initialize */
     if (self->hasvalue) {
@@ -1601,9 +1659,8 @@ static bool ast_local_codegen(ast_value *self, ir_function *func, bool param)
         }
 
         /* we are lame now - considering the way QC works we won't tolerate arrays > 1024 elements */
-        if (!self->expression.count || self->expression.count > OPTS_OPTION_U32(OPTION_MAX_ARRAY_SIZE)) {
-            compile_error(ast_ctx(self), "Invalid array of size %lu", (unsigned long)self->expression.count);
-        }
+        if (!check_array(self, self))
+            return false;
 
         self->ir_values = (ir_value**)mem_a(sizeof(self->ir_values[0]) * self->expression.count);
         if (!self->ir_values) {
@@ -1739,6 +1796,7 @@ bool ast_function_codegen(ast_function *self, ir_builder *ir)
     ir_value    *dummy;
     ast_expression         *ec;
     ast_expression_codegen *cgen;
+
     size_t    i;
 
     (void)ir;
@@ -1815,6 +1873,16 @@ bool ast_function_codegen(ast_function *self, ir_builder *ir)
         }
     }
 
+    /* generate the call for any accumulation */
+    if (self->accumulate) {
+        ast_call *call = ast_call_new(ast_ctx(self), (ast_expression*)self->accumulate->vtype);
+        for (i = 0; i < vec_size(ec->params); i++)
+            vec_push(call->params, (ast_expression*)ec->params[i]);
+        vec_push(vec_last(self->blocks)->exprs, (ast_expression*)call);
+
+        self->ir_func->flags |= IR_FLAG_ACCUMULATE;
+    }
+
     for (i = 0; i < vec_size(self->blocks); ++i) {
         cgen = self->blocks[i]->expression.codegen;
         if (!(*cgen)((ast_expression*)self->blocks[i], self, false, &dummy))
@@ -1847,6 +1915,17 @@ bool ast_function_codegen(ast_function *self, ir_builder *ir)
         }
     }
     return true;
+}
+
+static bool starts_a_label(ast_expression *ex)
+{
+    while (ex && ast_istype(ex, ast_block)) {
+        ast_block *b = (ast_block*)ex;
+        ex = b->exprs[0];
+    }
+    if (!ex)
+        return false;
+    return ast_istype(ex, ast_label);
 }
 
 /* Note, you will not see ast_block_codegen generate ir_blocks.
@@ -1894,7 +1973,7 @@ bool ast_block_codegen(ast_block *self, ast_function *func, bool lvalue, ir_valu
     for (i = 0; i < vec_size(self->exprs); ++i)
     {
         ast_expression_codegen *gen;
-        if (func->curblock->final && !ast_istype(self->exprs[i], ast_label)) {
+        if (func->curblock->final && !starts_a_label(self->exprs[i])) {
             if (compile_warning(ast_ctx(self->exprs[i]), WARN_UNREACHABLE_CODE, "unreachable statement"))
                 return false;
             continue;
@@ -2025,6 +2104,8 @@ bool ast_binary_codegen(ast_binary *self, ast_function *func, bool lvalue, ir_va
     if ((OPTS_FLAG(SHORT_LOGIC) || OPTS_FLAG(PERL_LOGIC)) &&
         (self->op == INSTR_AND || self->op == INSTR_OR))
     {
+        /* NOTE: The short-logic path will ignore right_first */
+
         /* short circuit evaluation */
         ir_block *other, *merge;
         ir_block *from_left, *from_right;
@@ -2122,13 +2203,21 @@ bool ast_binary_codegen(ast_binary *self, ast_function *func, bool lvalue, ir_va
         return true;
     }
 
-    cgen = self->left->codegen;
-    if (!(*cgen)((ast_expression*)(self->left), func, false, &left))
-        return false;
-
-    cgen = self->right->codegen;
-    if (!(*cgen)((ast_expression*)(self->right), func, false, &right))
-        return false;
+    if (self->right_first) {
+        cgen = self->right->codegen;
+        if (!(*cgen)((ast_expression*)(self->right), func, false, &right))
+            return false;
+        cgen = self->left->codegen;
+        if (!(*cgen)((ast_expression*)(self->left), func, false, &left))
+            return false;
+    } else {
+        cgen = self->left->codegen;
+        if (!(*cgen)((ast_expression*)(self->left), func, false, &left))
+            return false;
+        cgen = self->right->codegen;
+        if (!(*cgen)((ast_expression*)(self->right), func, false, &right))
+            return false;
+    }
 
     *out = ir_block_create_binop(func->curblock, ast_ctx(self), ast_function_label(func, "bin"),
                                  self->op, left, right);
@@ -2533,8 +2622,8 @@ bool ast_ifthen_codegen(ast_ifthen *self, ast_function *func, bool lvalue, ir_va
     /* update the block which will get the jump - because short-logic or ternaries may have changed this */
     cond = func->curblock;
 
-    /* try constant folding away the if */
-    if ((fold = fold_cond(condval, func, self)) != -1)
+    /* try constant folding away the condition */
+    if ((fold = fold_cond_ifthen(condval, func, self)) != -1)
         return fold;
 
     if (self->on_true) {
@@ -2617,6 +2706,7 @@ bool ast_ternary_codegen(ast_ternary *self, ast_function *func, bool lvalue, ir_
     ir_block *ontrue, *ontrue_out = NULL;
     ir_block *onfalse, *onfalse_out = NULL;
     ir_block *merge;
+    int       fold  = 0;
 
     /* Ternary can never create an lvalue... */
     if (lvalue)
@@ -2640,6 +2730,10 @@ bool ast_ternary_codegen(ast_ternary *self, ast_function *func, bool lvalue, ir_
     if (!(*cgen)((ast_expression*)(self->cond), func, false, &condval))
         return false;
     cond_out = func->curblock;
+
+    /* try constant folding away the condition */
+    if ((fold = fold_cond_ternary(condval, func, self)) != -1)
+        return fold;
 
     /* create on-true block */
     ontrue = ir_function_create_block(ast_ctx(self), func->ir_func, ast_function_label(func, "tern_T"));

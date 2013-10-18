@@ -21,7 +21,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include <time.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -30,6 +29,7 @@
 #include "lexer.h"
 
 #define HT_MACROS 1024
+
 typedef struct {
     bool on;
     bool was_on;
@@ -85,22 +85,14 @@ static uint32_t ftepp_predef_randval  = 0;
 
 /* __DATE__ */
 static char *ftepp_predef_date(lex_file *context) {
-    struct tm *itime = NULL;
-    time_t     rtime;
-    char      *value = (char*)mem_a(82);
-    /* 82 is enough for strftime but we also have " " in our string */
+    const struct tm *itime = NULL;
+    char            *value = (char*)mem_a(82);
+    time_t           rtime;
 
     (void)context;
 
-    /* get time */
     time (&rtime);
-
-#ifdef _MSC_VER
-    localtime_s(itime, &rtime);
-#else
-    itime = localtime(&rtime);
-#endif
-
+    itime = util_localtime(&rtime);
     strftime(value, 82, "\"%b %d %Y\"", itime);
 
     return value;
@@ -108,22 +100,14 @@ static char *ftepp_predef_date(lex_file *context) {
 
 /* __TIME__ */
 static char *ftepp_predef_time(lex_file *context) {
-    struct tm *itime = NULL;
-    time_t     rtime;
-    char      *value = (char*)mem_a(82);
-    /* 82 is enough for strftime but we also have " " in our string */
+    const struct tm *itime = NULL;
+    char            *value = (char*)mem_a(82);
+    time_t           rtime;
 
     (void)context;
 
-    /* get time */
     time (&rtime);
-
-#ifdef _MSC_VER
-    localtime_s(itime, &rtime);
-#else
-    itime = localtime(&rtime);
-#endif
-
+    itime = util_localtime(&rtime);
     strftime(value, 82, "\"%X\"", itime);
 
     return value;
@@ -180,27 +164,14 @@ static char *ftepp_predef_randomlast(lex_file *context) {
 /* __TIMESTAMP__ */
 static char *ftepp_predef_timestamp(lex_file *context) {
     struct stat finfo;
-    char       *find;
+    const char *find;
     char       *value;
     size_t      size;
-#ifdef _MSC_VER
-	char        buffer[64];
-#endif
+
     if (stat(context->name, &finfo))
         return util_strdup("\"<failed to determine timestamp>\"");
 
-    /*
-     * ctime and its fucking annoying newline char, no worries, we're
-     * professionals here.
-     */
-
-#ifndef _MSC_VER
-    find  = ctime(&finfo.st_mtime);
-#else
-	ctime_s(buffer, sizeof(buffer), &finfo.st_mtime);
-	find = buffer;
-#endif
-
+    find = util_ctime(&finfo.st_mtime);
     value = (char*)mem_a(strlen(find) + 1);
     memcpy(&value[1], find, (size = strlen(find)) - 1);
 
@@ -1303,7 +1274,7 @@ static void unescape(const char *str, char *out) {
 
 static char *ftepp_include_find_path(const char *file, const char *pathfile)
 {
-    FILE       *fp;
+    fs_file_t  *fp;
     char       *filename = NULL;
     const char *last_slash;
     size_t      len;
@@ -1523,6 +1494,11 @@ static bool ftepp_else_allowed(ftepp_t *ftepp)
     return true;
 }
 
+static GMQCC_INLINE void ftepp_inmacro(ftepp_t *ftepp, const char *hash) {
+    if (ftepp->in_macro)
+        (void)!ftepp_warn(ftepp, WARN_DIRECTIVE_INMACRO, "`#%s` directive in macro", hash);
+}
+
 static bool ftepp_hash(ftepp_t *ftepp)
 {
     ppcondition cond;
@@ -1538,12 +1514,15 @@ static bool ftepp_hash(ftepp_t *ftepp)
         case TOKEN_IDENT:
         case TOKEN_TYPENAME:
             if (!strcmp(ftepp_tokval(ftepp), "define")) {
+                ftepp_inmacro(ftepp, "define");
                 return ftepp_define(ftepp);
             }
             else if (!strcmp(ftepp_tokval(ftepp), "undef")) {
+                ftepp_inmacro(ftepp, "undef");
                 return ftepp_undef(ftepp);
             }
             else if (!strcmp(ftepp_tokval(ftepp), "ifdef")) {
+                ftepp_inmacro(ftepp, "ifdef");
                 if (!ftepp_ifdef(ftepp, &cond))
                     return false;
                 cond.was_on = cond.on;
@@ -1552,6 +1531,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "ifndef")) {
+                ftepp_inmacro(ftepp, "ifndef");
                 if (!ftepp_ifdef(ftepp, &cond))
                     return false;
                 cond.on = !cond.on;
@@ -1561,6 +1541,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "elifdef")) {
+                ftepp_inmacro(ftepp, "elifdef");
                 if (!ftepp_else_allowed(ftepp))
                     return false;
                 if (!ftepp_ifdef(ftepp, &cond))
@@ -1572,6 +1553,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "elifndef")) {
+                ftepp_inmacro(ftepp, "elifndef");
                 if (!ftepp_else_allowed(ftepp))
                     return false;
                 if (!ftepp_ifdef(ftepp, &cond))
@@ -1584,6 +1566,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "elif")) {
+                ftepp_inmacro(ftepp, "elif");
                 if (!ftepp_else_allowed(ftepp))
                     return false;
                 if (!ftepp_if(ftepp, &cond))
@@ -1595,6 +1578,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "if")) {
+                ftepp_inmacro(ftepp, "if");
                 if (!ftepp_if(ftepp, &cond))
                     return false;
                 cond.was_on = cond.on;
@@ -1603,6 +1587,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "else")) {
+                ftepp_inmacro(ftepp, "else");
                 if (!ftepp_else_allowed(ftepp))
                     return false;
                 pc = &vec_last(ftepp->conditions);
@@ -1613,6 +1598,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "endif")) {
+                ftepp_inmacro(ftepp, "endif");
                 if (!vec_size(ftepp->conditions)) {
                     ftepp_error(ftepp, "#endif without #if");
                     return false;
@@ -1623,6 +1609,7 @@ static bool ftepp_hash(ftepp_t *ftepp)
                 break;
             }
             else if (!strcmp(ftepp_tokval(ftepp), "include")) {
+                ftepp_inmacro(ftepp, "include");
                 return ftepp_include(ftepp);
             }
             else if (!strcmp(ftepp_tokval(ftepp), "pragma")) {

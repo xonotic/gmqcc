@@ -21,10 +21,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include <string.h>
-#include <stdlib.h>
-
+#define GMQCC_PLATFORM_HEADER
 #include "gmqcc.h"
+#include "platform.h"
 
 /*
  * Initially this was handled with a table in the gmqcc.h header, but
@@ -32,7 +31,7 @@
  * each translation unit, causing all these strings to be duplicated
  * for every .c file it was included into. This method culls back on
  * it. This is a 'utility' function because the executor also depends
- * on this for dissasembled bytecode.
+ * on this for disassembled byte-code.
  */
 const char *util_instr_str[VINSTR_END] = {
     "DONE",       "MUL_F",      "MUL_V",      "MUL_FV",
@@ -53,20 +52,6 @@ const char *util_instr_str[VINSTR_END] = {
     "STATE",      "GOTO",       "AND",        "OR",
     "BITAND",     "BITOR"
 };
-
-void util_debug(const char *area, const char *ms, ...) {
-    va_list  va;
-    if (!OPTS_OPTION_BOOL(OPTION_DEBUG))
-        return;
-
-    if (!strcmp(area, "MEM") && !OPTS_OPTION_BOOL(OPTION_MEMCHK))
-        return;
-
-    va_start(va, ms);
-    con_out ("[%s] ", area);
-    con_vout(ms, va);
-    va_end  (va);
-}
 
 /*
  * only required if big endian .. otherwise no need to swap
@@ -148,7 +133,7 @@ void util_endianswap(void *_data, size_t length, unsigned int typesize) {
  * well as (but not limited to the idea of reflected versions) where the final register
  * value becomes reversed, and finally weather the value itself is used to XOR the final
  * register value.  AS such you can already imagine how painfully annoying CRCs are,
- * of course we stand to target Quake, which expects it's certian set of rules for proper
+ * of course we stand to target Quake, which expects it's certain set of rules for proper
  * calculation of a CRC.
  *
  * In most traditional CRC algorithms on uses a reflected table driven method where a value
@@ -201,7 +186,7 @@ uint16_t util_crc16(uint16_t current, const char *k, size_t len) {
         h = util_crc16_table[(h>>8)^((unsigned char)*k)]^(h<<8);
     return h;
 }
-/* Reflective Varation (for reference) */
+/* Reflective Variation (for reference) */
 #if 0
 uint16_t util_crc16(const char *k, int len, const short clamp) {
     register uint16_t h= (uint16_t)0xFFFFFFFF;
@@ -212,8 +197,8 @@ uint16_t util_crc16(const char *k, int len, const short clamp) {
 #endif
 
 /*
- * modifier is the match to make and the transpsition from it, while add is the upper-value that determines the
- * transposion from uppercase to lower case.
+ * modifier is the match to make and the transposition from it, while add is the upper-value that determines the
+ * transposition from uppercase to lower case.
  */
 static GMQCC_INLINE size_t util_strtransform(const char *in, char *out, size_t outsz, const char *mod, int add) {
     size_t sz = 1;
@@ -238,167 +223,103 @@ size_t util_optimizationtostr(const char *in, char *out, size_t outsz) {
     return util_strtransform(in, out, outsz, "_ ", 'a'-'A');
 }
 
-/*
- * Portable implementation of vasprintf/asprintf. Assumes vsnprintf
- * exists, otherwise compiler error.
- *
- * TODO: fix for MSVC ....
- */
-int util_vasprintf(char **dat, const char *fmt, va_list args) {
-    int   ret;
-    int   len;
-    char *tmp = NULL;
+int util_snprintf(char *str, size_t size, const char *fmt, ...) {
+    va_list  arg;
+    int      ret;
 
-    /*
-     * For visuals tido _vsnprintf doesn't tell you the length of a
-     * formatted string if it overflows. However there is a MSVC
-     * intrinsic (which is documented wrong) called _vcsprintf which
-     * will return the required amount to allocate.
-     */
-    #ifdef _MSC_VER
-        if ((len = _vscprintf(fmt, args)) < 0) {
-            *dat = NULL;
-            return -1;
-        }
+    va_start(arg, fmt);
+    ret = platform_vsnprintf(str, size, fmt, arg);
+    va_end(arg);
 
-        tmp = (char*)mem_a(len + 1);
-        if ((ret = _vsnprintf_s(tmp, len+1, len+1, fmt, args)) != len) {
-            mem_d(tmp);
-            *dat = NULL;
-            return -1;
-        }
-        *dat = tmp;
-        return len;
-    #else
-        /*
-         * For everything else we have a decent conformint vsnprintf that
-         * returns the number of bytes needed.  We give it a try though on
-         * a short buffer, since efficently speaking, it could be nice to
-         * above a second vsnprintf call.
-         */
-        char    buf[128];
-        va_list cpy;
-        va_copy(cpy, args);
-        len = vsnprintf(buf, sizeof(buf), fmt, cpy);
-        va_end (cpy);
-
-        if (len < (int)sizeof(buf)) {
-            *dat = util_strdup(buf);
-            return len;
-        }
-
-        /* not large enough ... */
-        tmp = (char*)mem_a(len + 1);
-        if ((ret = vsnprintf(tmp, len + 1, fmt, args)) != len) {
-            mem_d(tmp);
-            *dat = NULL;
-            return -1;
-        }
-
-        *dat = tmp;
-        return len;
-    #endif
+    return ret;
 }
+
 int util_asprintf(char **ret, const char *fmt, ...) {
     va_list  args;
     int      read;
+
     va_start(args, fmt);
-    read = util_vasprintf(ret, fmt, args);
+    read = platform_vasprintf(ret, fmt, args);
     va_end  (args);
 
     return read;
 }
 
+int util_sscanf(const char *str, const char *format, ...) {
+    va_list  args;
+    int      read;
+
+    va_start(args, format);
+    read = platform_vsscanf(str, format, args);
+    va_end(args);
+
+    return read;
+}
+
+char *util_strncpy(char *dest, const char *src, size_t n) {
+    return platform_strncpy(dest, src, n);
+}
+char *util_strncat(char *dest, const char *src, size_t n) {
+    return platform_strncat(dest, src, n);
+}
+char *util_strcat(char *dest, const char *src) {
+    return platform_strcat(dest, src);
+}
+const char *util_strerror(int err) {
+    return platform_strerror(err);
+}
+
+const struct tm *util_localtime(const time_t *timer) {
+    return platform_localtime(timer);
+}
+const char *util_ctime(const time_t *timer) {
+    return platform_ctime(timer);
+}
+
+bool util_isatty(fs_file_t *file) {
+    if (file == (fs_file_t*)stdout) return !!platform_isatty(STDOUT_FILENO);
+    if (file == (fs_file_t*)stderr) return !!platform_isatty(STDERR_FILENO);
+    return false;
+}
+
+const char *util_tmpnam(char *str) {
+    return platform_tmpnam(str);
+}
+
 /*
- * These are various re-implementations (wrapping the real ones) of
- * string functions that MSVC consideres unsafe. We wrap these up and
- * use the safe varations on MSVC.
+ * A small noncryptographic PRNG based on:
+ * http://burtleburtle.net/bob/rand/smallprng.html
  */
-#ifdef _MSC_VER
-    static char **util_strerror_allocated() {
-        static char **data = NULL;
-        return data;
-    }
+static uint32_t util_rand_state[4] = {
+    0xF1EA5EED, 0x00000000,
+    0x00000000, 0x00000000
+};
 
-    static void util_strerror_cleanup(void) {
-        size_t i;
-        char  **data = util_strerror_allocated();
-        for (i = 0; i < vec_size(data); i++)
-            mem_d(data[i]);
-        vec_free(data);
-    }
+#define util_rand_rot(X, Y) (((X)<<(Y))|((X)>>(32-(Y))))
 
-    const char *util_strerror(int num) {
-        char         *allocated = NULL;
-        static bool   install   = false;
-        static size_t tries     = 0;
-        char        **vector    = util_strerror_allocated();
+uint32_t util_rand() {
+    uint32_t last;
 
-        /* try installing cleanup handler */
-        while (!install) {
-            if (tries == 32)
-                return "(unknown)";
+    last               = util_rand_state[0] - util_rand_rot(util_rand_state[1], 27);
+    util_rand_state[0] = util_rand_state[1] ^ util_rand_rot(util_rand_state[2], 17);
+    util_rand_state[1] = util_rand_state[2] + util_rand_state[3];
+    util_rand_state[2] = util_rand_state[3] + last;
+    util_rand_state[3] = util_rand_state[0] + last;
 
-            install = !atexit(&util_strerror_cleanup);
-            tries ++;
-        }
+    return util_rand_state[3];
+}
 
-        allocated = (char*)mem_a(4096); /* A page must be enough */
-        strerror_s(allocated, 4096, num);
-
-        vec_push(vector, allocated);
-        return (const char *)allocated;
-    }
-
-    int util_snprintf(char *src, size_t bytes, const char *format, ...) {
-        int      rt;
-        va_list  va;
-        va_start(va, format);
-
-        rt = vsprintf_s(src, bytes, format, va);
-        va_end  (va);
-
-        return rt;
-    }
-
-    char *util_strcat(char *dest, const char *src) {
-        strcat_s(dest, strlen(src), src);
-        return dest;
-    }
-
-    char *util_strncpy(char *dest, const char *src, size_t num) {
-        strncpy_s(dest, num, src, num);
-        return dest;
-    }
-#else
-    const char *util_strerror(int num) {
-        return strerror(num);
-    }
-
-    int util_snprintf(char *src, size_t bytes, const char *format, ...) {
-        int      rt;
-        va_list  va;
-        va_start(va, format);
-        rt = vsnprintf(src, bytes, format, va);
-        va_end  (va);
-
-        return rt;
-    }
-
-    char *util_strcat(char *dest, const char *src) {
-        return strcat(dest, src);
-    }
-
-    char *util_strncpy(char *dest, const char *src, size_t num) {
-        return strncpy(dest, src, num);
-    }
-
-#endif /*! _MSC_VER */
-
+#undef util_rand_rot
 
 void util_seed(uint32_t value) {
-    srand((int)value);
+    size_t i;
+
+    util_rand_state[0] = 0xF1EA5EED;
+    util_rand_state[1] = value;
+    util_rand_state[2] = value;
+    util_rand_state[3] = value;
+
+    for (i = 0; i < 20; ++i)
+        (void)util_rand();
 }
-uint32_t util_rand() {
-    return rand();
-}
+

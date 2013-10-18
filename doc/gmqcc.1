@@ -153,7 +153,7 @@ Adds compiler information to the generated binary file. Currently
 this includes the following globals:
 .Bl -tag -width indent -compact
 .It Li reserved:version
-String containing the compiler version as printed by the --version
+String containing the compiler version as printed by the \-\-version
 parameter.
 .El
 .It Fl -correct , Fl -no-correct
@@ -327,10 +327,17 @@ it can happen that incompatible types are passed to functions. This
 enables several warnings when static typechecking cannot guarantee
 consistent behavior.
 .It Fl W Ns Cm breakdef
-When compiling original id1 QC, there is a definition for `break`
+When compiling original id1 QC there is a definition for `break`
 which conflicts with the 'break' keyword in GMQCC. Enabling this
-warning will print a warning when the definition occurs. The
-definition is ignored for both cases.
+will print a warning when the definition occurs. The definition is
+ignored for both cases.
+.It Fl W Ns Cm const-overwrite
+When compiling original QuakeWorld QC there are instances where
+code overwrites constants. This is considered an error, however
+for QuakeWorld to compile it needs to be treated as a warning
+instead, as such this warning only works when -std=qcc.
+.It Fl W Ns Cm directive-inmacro
+Warn about the use of preprocessor directives inside macros.
 .El
 .Sh COMPILE FLAGS
 .Bl -tag -width Ds
@@ -351,7 +358,7 @@ features used in the Xonotic codebase. If you need more, write a
 ticket.
 .It Fl f Ns Cm ftepp-predefs
 Enable some predefined macros. This only works in combination with
-\'-fftepp' and is currently not included by '-std=fteqcc'. The
+\'\-fftepp' and is currently not included by '\-std=fteqcc'. The
 following macros will be added:
 .Bd -literal -offset indent
 __LINE__
@@ -535,6 +542,15 @@ When passing on varargs to a different functions, this turns some
 static error cases into warnings. Like when the caller's varargs are
 restricted to a different type than the callee's parameter. Or a list
 of unrestricted varargs is passed into restricted varargs.
+.It Fl f Ns Cm typeless-stores
+Always use STORE_F, LOAD_F, STOREP_F when accessing scalar variables.
+This is somewhat incorrect assembly instruction use, but in all engines
+they do exactly the same. This makes disassembly output harder to read,
+breaks decompilers, but causes the output file to be better compressible.
+.It Fl f Ns Cm sort-operands
+In commutative instructions, always put the lower-numbered operand first.
+This shaves off 1 byte of entropy from all these instructions, reducing
+compressed size of the output file.
 .El
 .Sh OPTIMIZATIONS
 .Bl -tag -width Ds
@@ -664,7 +680,7 @@ A documented example for a gmqcc.ini file.
 .Sh AUTHOR
 See <http://graphitemaster.github.com/gmqcc>.
 .Sh BUGS
-Currently the '-fftepp-predefs' flag is not included by '-std=fteqcc',
+Currently the '\-fftepp-predefs' flag is not included by '\-std=fteqcc',
 partially because it is not entirely conformant to fteqcc.
 .Pp
 Please report bugs on <http://github.com/graphitemaster/gmqcc/issues>,

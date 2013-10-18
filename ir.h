@@ -51,11 +51,11 @@ typedef struct ir_value_s {
     /* constantvalues */
     bool hasvalue;
     union {
-        float    vfloat;
-        int      vint;
-        vec3_t   vvec;
-        int32_t  ivec[3];
-        char    *vstring;
+        qcfloat_t vfloat;
+        int       vint;
+        vec3_t    vvec;
+        int32_t   ivec[3];
+        char     *vstring;
         struct ir_value_s *vpointer;
         struct ir_function_s *vfunc;
     } constval;
@@ -231,6 +231,8 @@ typedef struct ir_function_s
 #define IR_FLAG_HAS_UNINITIALIZED (1<<2)
 #define IR_FLAG_HAS_GOTO          (1<<3)
 #define IR_FLAG_INCLUDE_DEF       (1<<4)
+#define IR_FLAG_ERASEABLE         (1<<5)
+#define IR_FLAG_ACCUMULATE        (1<<6)
 #define IR_FLAG_MASK_NO_OVERLAP     (IR_FLAG_HAS_ARRAYS | IR_FLAG_HAS_UNINITIALIZED)
 #define IR_FLAG_MASK_NO_LOCAL_TEMPS (IR_FLAG_HAS_ARRAYS | IR_FLAG_HAS_UNINITIALIZED)
 
@@ -240,6 +242,7 @@ ir_block*       ir_function_create_block(lex_ctx_t ctx, ir_function*, const char
 
 /* builder */
 #define IR_HT_SIZE 1024
+#define IR_MAX_VINSTR_TEMPS 1
 typedef struct ir_builder_s
 {
     char *name;
@@ -261,12 +264,16 @@ typedef struct ir_builder_s
     uint32_t      first_common_globaltemp;
 
     const char **filenames;
-    qcint_t       *filestrings;
+    qcint_t     *filestrings;
     /* we cache the #IMMEDIATE string here */
-    qcint_t        str_immediate;
+    qcint_t      str_immediate;
     /* there should just be this one nil */
     ir_value    *nil;
     ir_value    *reserved_va_count;
+    /* some virtual instructions require temps, and their code is isolated
+     * so that we don't need to keep track of their liveness.
+     */
+    ir_value    *vinstr_temp[IR_MAX_VINSTR_TEMPS];
 
     /* code generator */
     code_t      *code;

@@ -24,6 +24,7 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+
 #include "parser.h"
 
 #define PARSER_HT_LOCALS  2
@@ -283,6 +284,29 @@ static bool rotate_entfield_array_index_nodes(ast_expression **out)
     return true;
 }
 
+static bool check_write_to(lex_ctx_t ctx, ast_expression *expr)
+{
+    if (ast_istype(expr, ast_value)) {
+        ast_value *val = (ast_value*)expr;
+        if (val->cvq == CV_CONST) {
+            if (val->name[0] == '#') {
+                compile_error(ctx, "invalid assignment to a literal constant");
+                return false;
+            }
+            /*
+             * To work around quakeworld we must elide the error and make it
+             * a warning instead.
+             */
+            if (OPTS_OPTION_U32(OPTION_STANDARD) != COMPILER_QCC)
+                compile_error(ctx, "assignment to constant `%s`", val->name);
+            else
+                (void)!compile_warning(ctx, WARN_CONST_OVERWRITE, "assignment to constant `%s`", val->name);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
 {
     const oper_info *op;
@@ -290,7 +314,6 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
     ast_expression *out = NULL;
     ast_expression *exprs[3];
     ast_block      *blocks[3];
-    ast_value      *asvalue[3];
     ast_binstore   *asbinstore;
     size_t i, assignop, addop, subop;
     qcint_t  generated_op = 0;
@@ -312,8 +335,10 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
     ctx = vec_last(sy->ops).ctx;
 
     if (vec_size(sy->out) < op->operands) {
-        compile_error(ctx, "internal error: not enough operands: %i (operator %s (%i))", vec_size(sy->out),
-                      op->op, (int)op->id);
+        if (op->flags & OP_PREFIX)
+            compile_error(ctx, "expected expression after unary operator `%s`", op->op, (int)op->id);
+        else /* this should have errored previously already */
+            compile_error(ctx, "expected expression after operator `%s`", op->op, (int)op->id);
         return false;
     }
 
@@ -327,7 +352,6 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
     for (i = 0; i < op->operands; ++i) {
         exprs[i]  = sy->out[vec_size(sy->out)+i].out;
         blocks[i] = sy->out[vec_size(sy->out)+i].block;
-        asvalue[i] = (ast_value*)exprs[i];
 
         if (exprs[i]->vtype == TYPE_NOEXPR &&
             !(i != 0 && op->id == opid2('?',':')) &&
@@ -349,6 +373,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
 #define NotSameType(T) \
              (exprs[0]->vtype != exprs[1]->vtype || \
               exprs[0]->vtype != T)
+
     switch (op->id)
     {
         default:
@@ -443,24 +468,16 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             out = exprs[0];
             break;
         case opid2('-','P'):
-            if (!(out = fold_op(parser->fold, op, exprs))) {
-                switch (exprs[0]->vtype) {
-                    case TYPE_FLOAT:
-                        out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F,
-                                                                  (ast_expression*)parser->fold->imm_float[0],
-                                                                  exprs[0]);
-                        break;
-                    case TYPE_VECTOR:
-                        out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_V,
-                                                                  (ast_expression*)parser->fold->imm_vector[0],
-                                                                  exprs[0]);
-                        break;
-                    default:
-                    compile_error(ctx, "invalid types used in expression: cannot negate type %s",
+            if ((out = fold_op(parser->fold, op, exprs)))
+                break;
+
+            if (exprs[0]->vtype != TYPE_FLOAT &&
+                exprs[0]->vtype != TYPE_VECTOR) {
+                    compile_error(ctx, "invalid types used in unary expression: cannot negate type %s",
                                   type_name[exprs[0]->vtype]);
-                    return false;
-                }
+                return false;
             }
+            out = (ast_expression*)ast_unary_new(ctx, (VINSTR_NEG_F-TYPE_FLOAT) + exprs[0]->vtype, exprs[0]);
             break;
 
         case opid2('!','P'):
@@ -624,55 +641,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
 
         case opid1('|'):
         case opid1('&'):
-            if (NotSameType(TYPE_FLOAT)) {
-                compile_error(ctx, "invalid types used in expression: cannot perform bit operations between types %s and %s",
-                              type_name[exprs[0]->vtype],
-                              type_name[exprs[1]->vtype]);
-                return false;
-            }
-            if (!(out = fold_op(parser->fold, op, exprs)))
-                out = (ast_expression*)ast_binary_new(ctx,
-                    (op->id == opid1('|') ? INSTR_BITOR : INSTR_BITAND),
-                    exprs[0], exprs[1]);
-            break;
         case opid1('^'):
-            /*
-             * Okay lets designate what the hell is an acceptable use
-             * of the ^ operator. In many vector processing units, XOR
-             * is allowed to be used on vectors, but only if the first
-             * operand is a vector, the second operand can be a float
-             * or vector. It's never legal for the first operand to be
-             * a float, and then the following operand to be a vector.
-             * Further more, the only time it is legal to do XOR otherwise
-             * is when both operand are floats. This nicely crafted if
-             * statement catches them all.
-             *
-             * In the event that the first operand is a vector, two
-             * possible situations can arise, thus, each element of
-             * vector A (operand A) is exclusive-ORed with the corresponding
-             * element of vector B (operand B), If B is scalar, the
-             * scalar value is first replicated for each element.
-             *
-             * The QCVM itself lacks a BITXOR instruction. Thus emulating
-             * the mathematics of it is required. The following equation
-             * is used: (LHS | RHS) & ~(LHS & RHS). However, due to the
-             * QCVM also lacking a BITNEG instruction, we need to emulate
-             * ~FOO with -1 - FOO, the whole process becoming this nicely
-             * crafted expression: (LHS | RHS) & (-1 - (LHS & RHS)).
-             *
-             * When A is not scalar, this process is repeated for all
-             * components of vector A with the value in operand B,
-             * only if operand B is scalar. When A is not scalar, and B
-             * is also not scalar, this process is repeated for all
-             * components of the vector A with the components of vector B.
-             * Finally when A is scalar and B is scalar, this process is
-             * simply used once for A and B being LHS and RHS respectfully.
-             *
-             * Yes the semantics are a bit strange (no pun intended).
-             * But then again BITXOR is strange itself, consdering it's
-             * commutative, assocative, and elements of the BITXOR operation
-             * are their own inverse.
-             */
             if ( !(exprs[0]->vtype == TYPE_FLOAT  && exprs[1]->vtype == TYPE_FLOAT) &&
                  !(exprs[0]->vtype == TYPE_VECTOR && exprs[1]->vtype == TYPE_FLOAT) &&
                  !(exprs[0]->vtype == TYPE_VECTOR && exprs[1]->vtype == TYPE_VECTOR))
@@ -689,46 +658,26 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                  * since scalar ^ vector is not allowed.
                  */
                 if (exprs[0]->vtype == TYPE_FLOAT) {
-                    ast_binary *expr = ast_binary_new(
-                        ctx,
-                        INSTR_SUB_F,
-                        (ast_expression*)parser->fold->imm_float[2],
-                        (ast_expression*)ast_binary_new(
-                            ctx,
-                            INSTR_BITAND,
-                            exprs[0],
-                            exprs[1]
-                        )
-                    );
-                    expr->refs = AST_REF_NONE;
-
-                    out = (ast_expression*)
-                        ast_binary_new(
-                            ctx,
-                            INSTR_BITAND,
-                            (ast_expression*)ast_binary_new(
-                                ctx,
-                                INSTR_BITOR,
-                                exprs[0],
-                                exprs[1]
-                            ),
-                            (ast_expression*)expr
-                        );
+                    out = (ast_expression*)ast_binary_new(ctx,
+                        (op->id == opid1('^') ? VINSTR_BITXOR : op->id == opid1('|') ? INSTR_BITOR : INSTR_BITAND),
+                        exprs[0], exprs[1]);
                 } else {
                     /*
-                     * The first is a vector: vector is allowed to xor with vector and
+                     * The first is a vector: vector is allowed to bitop with vector and
                      * with scalar, branch here for the second operand.
                      */
                     if (exprs[1]->vtype == TYPE_VECTOR) {
                         /*
-                         * Xor all the values of the vector components against the
+                         * Bitop all the values of the vector components against the
                          * vectors components in question.
                          */
-                        compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor for vector against vector");
-                        return false;
+                        out = (ast_expression*)ast_binary_new(ctx,
+                            (op->id == opid1('^') ? VINSTR_BITXOR_V : op->id == opid1('|') ? VINSTR_BITOR_V : VINSTR_BITAND_V),
+                            exprs[0], exprs[1]);
                     } else {
-                        compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-xor for vector against float");
-                        return false;
+                        out = (ast_expression*)ast_binary_new(ctx,
+                            (op->id == opid1('^') ? VINSTR_BITXOR_VF : op->id == opid1('|') ? VINSTR_BITOR_VF : VINSTR_BITAND_VF),
+                            exprs[0], exprs[1]);
                     }
                 }
             }
@@ -814,6 +763,26 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 vec_push(gencall->params, exprs[1]);
                 out = (ast_expression*)gencall;
             }
+            break;
+
+        case opid2('>', '<'):
+            if (NotSameType(TYPE_VECTOR)) {
+                ast_type_to_string(exprs[0], ty1, sizeof(ty1));
+                ast_type_to_string(exprs[1], ty2, sizeof(ty2));
+                compile_error(ctx, "invalid types used in cross product: %s and %s",
+                    ty1, ty2);
+                return false;
+            }
+
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                out = (ast_expression*)ast_binary_new(
+                        parser_ctx(parser),
+                        VINSTR_CROSS,
+                        exprs[0],
+                        exprs[1]
+                );
+            }
+
             break;
 
         case opid3('<','=','>'): /* -1, 0, or 1 */
@@ -948,9 +917,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                         compile_error(ctx, "invalid types in assignment: cannot assign %s to %s", ty2, ty1);
                 }
             }
-            if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
-                compile_error(ctx, "assignment to constant `%s`", asvalue[0]->name);
-            }
+            (void)check_write_to(ctx, exprs[0]);
             out = (ast_expression*)ast_store_new(ctx, assignop, exprs[0], exprs[1]);
             break;
         case opid3('+','+','P'):
@@ -965,9 +932,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 addop = INSTR_ADD_F;
             else
                 addop = INSTR_SUB_F;
-            if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
-                compile_error(ast_ctx(exprs[0]), "assignment to constant `%s`", asvalue[0]->name);
-            }
+            (void)check_write_to(ast_ctx(exprs[0]), exprs[0]);
             if (ast_istype(exprs[0], ast_entfield)) {
                 out = (ast_expression*)ast_binstore_new(ctx, INSTR_STOREP_F, addop,
                                                         exprs[0],
@@ -993,9 +958,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 addop = INSTR_SUB_F;
                 subop = INSTR_ADD_F;
             }
-            if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
-                compile_error(ast_ctx(exprs[0]), "assignment to constant `%s`", asvalue[0]->name);
-            }
+            (void)check_write_to(ast_ctx(exprs[0]), exprs[0]);
             if (ast_istype(exprs[0], ast_entfield)) {
                 out = (ast_expression*)ast_binstore_new(ctx, INSTR_STOREP_F, addop,
                                                         exprs[0],
@@ -1010,6 +973,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             out = (ast_expression*)ast_binary_new(ctx, subop,
                                                   out,
                                                   (ast_expression*)parser->fold->imm_float[1]);
+
             break;
         case opid2('+','='):
         case opid2('-','='):
@@ -1022,9 +986,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                               ty1, ty2);
                 return false;
             }
-            if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
-                compile_error(ctx, "assignment to constant `%s`", asvalue[0]->name);
-            }
+            (void)check_write_to(ctx, exprs[0]);
             if (ast_istype(exprs[0], ast_entfield))
                 assignop = type_storep_instr[exprs[0]->vtype];
             else
@@ -1059,9 +1021,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                               ty1, ty2);
                 return false;
             }
-            if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
-                compile_error(ctx, "assignment to constant `%s`", asvalue[0]->name);
-            }
+            (void)check_write_to(ctx, exprs[0]);
             if (ast_istype(exprs[0], ast_entfield))
                 assignop = type_storep_instr[exprs[0]->vtype];
             else
@@ -1097,30 +1057,34 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             break;
         case opid2('&','='):
         case opid2('|','='):
-            if (NotSameType(TYPE_FLOAT)) {
+        case opid2('^','='):
+            if (NotSameType(TYPE_FLOAT) && NotSameType(TYPE_VECTOR)) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
                 compile_error(ctx, "invalid types used in expression: %s and %s",
                               ty1, ty2);
                 return false;
             }
-            if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
-                compile_error(ctx, "assignment to constant `%s`", asvalue[0]->name);
-            }
+            (void)check_write_to(ctx, exprs[0]);
             if (ast_istype(exprs[0], ast_entfield))
                 assignop = type_storep_instr[exprs[0]->vtype];
             else
                 assignop = type_store_instr[exprs[0]->vtype];
-            out = (ast_expression*)ast_binstore_new(ctx, assignop,
-                                                    (op->id == opid2('&','=') ? INSTR_BITAND : INSTR_BITOR),
-                                                    exprs[0], exprs[1]);
+            if (exprs[0]->vtype == TYPE_FLOAT)
+                out = (ast_expression*)ast_binstore_new(ctx, assignop,
+                                                        (op->id == opid2('^','=') ? VINSTR_BITXOR : op->id == opid2('&','=') ? INSTR_BITAND : INSTR_BITOR),
+                                                        exprs[0], exprs[1]);
+            else
+                out = (ast_expression*)ast_binstore_new(ctx, assignop,
+                                                        (op->id == opid2('^','=') ? VINSTR_BITXOR_V : op->id == opid2('&','=') ? VINSTR_BITAND_V : VINSTR_BITOR_V),
+                                                        exprs[0], exprs[1]);
             break;
         case opid3('&','~','='):
             /* This is like: a &= ~(b);
              * But QC has no bitwise-not, so we implement it as
              * a -= a & (b);
              */
-            if (NotSameType(TYPE_FLOAT)) {
+            if (NotSameType(TYPE_FLOAT) && NotSameType(TYPE_VECTOR)) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
                 compile_error(ctx, "invalid types used in expression: %s and %s",
@@ -1131,25 +1095,34 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                 assignop = type_storep_instr[exprs[0]->vtype];
             else
                 assignop = type_store_instr[exprs[0]->vtype];
-            out = (ast_expression*)ast_binary_new(ctx, INSTR_BITAND, exprs[0], exprs[1]);
+            if (exprs[0]->vtype == TYPE_FLOAT)
+                out = (ast_expression*)ast_binary_new(ctx, INSTR_BITAND, exprs[0], exprs[1]);
+            else
+                out = (ast_expression*)ast_binary_new(ctx, VINSTR_BITAND_V, exprs[0], exprs[1]);
             if (!out)
                 return false;
-            if (ast_istype(exprs[0], ast_value) && asvalue[0]->cvq == CV_CONST) {
-                compile_error(ctx, "assignment to constant `%s`", asvalue[0]->name);
-            }
-            asbinstore = ast_binstore_new(ctx, assignop, INSTR_SUB_F, exprs[0], out);
+            (void)check_write_to(ctx, exprs[0]);
+            if (exprs[0]->vtype == TYPE_FLOAT)
+                asbinstore = ast_binstore_new(ctx, assignop, INSTR_SUB_F, exprs[0], out);
+            else
+                asbinstore = ast_binstore_new(ctx, assignop, INSTR_SUB_V, exprs[0], out);
             asbinstore->keep_dest = true;
             out = (ast_expression*)asbinstore;
             break;
 
         case opid2('~', 'P'):
-            if (exprs[0]->vtype != TYPE_FLOAT) {
+            if (exprs[0]->vtype != TYPE_FLOAT && exprs[0]->vtype != TYPE_VECTOR) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 compile_error(ast_ctx(exprs[0]), "invalid type for bit not: %s", ty1);
                 return false;
             }
-            if (!(out = fold_op(parser->fold, op, exprs)))
-                out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F, (ast_expression*)parser->fold->imm_float[2], exprs[0]);
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                if (exprs[0]->vtype == TYPE_FLOAT) {
+                    out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_F, (ast_expression*)parser->fold->imm_float[2], exprs[0]);
+                } else {
+                    out = (ast_expression*)ast_binary_new(ctx, INSTR_SUB_V, (ast_expression*)parser->fold->imm_vector[1], exprs[0]);
+                }
+            }
             break;
     }
 #undef NotSameType
@@ -1171,6 +1144,7 @@ static bool parser_close_call(parser_t *parser, shunt *sy)
 
     size_t          fid;
     size_t          paramcount, i;
+    bool            fold = true;
 
     fid = vec_last(sy->ops).off;
     vec_shrinkby(sy->ops, 1);
@@ -1213,13 +1187,58 @@ static bool parser_close_call(parser_t *parser, shunt *sy)
         vec_shrinkby(sy->out, 1);
         return true;
     }
+
+    /*
+     * Now we need to determine if the function that is being called is
+     * an intrinsic so we can evaluate if the arguments to it are constant
+     * and than fruitfully fold them.
+     */
+#define fold_can_1(X)  \
+    (ast_istype(((ast_expression*)(X)), ast_value) && (X)->hasvalue && ((X)->cvq == CV_CONST) && \
+                ((ast_expression*)(X))->vtype != TYPE_FUNCTION)
+
+    if (fid + 1 < vec_size(sy->out))
+        ++paramcount;
+
+    for (i = 0; i < paramcount; ++i) {
+        if (!fold_can_1((ast_value*)sy->out[fid + 1 + i].out)) {
+            fold = false;
+            break;
+        }
+    }
+
+    /*
+     * All is well which ends well, if we make it into here we can ignore the
+     * intrinsic call and just evaluate it i.e constant fold it.
+     */
+    if (fold && ast_istype(fun, ast_value) && ((ast_value*)fun)->intrinsic) {
+        ast_expression **exprs  = NULL;
+        ast_expression *foldval = NULL;
+
+        for (i = 0; i < paramcount; i++)
+            vec_push(exprs, sy->out[fid+1 + i].out);
+
+        if (!(foldval = intrin_fold(parser->intrin, (ast_value*)fun, exprs))) {
+            vec_free(exprs);
+            goto fold_leave;
+        }
+
+        /*
+         * Blub: what sorts of unreffing and resizing of
+         * sy->out should I be doing here?
+         */
+        sy->out[fid] = syexp(foldval->node.context, foldval);
+        vec_shrinkby(sy->out, paramcount);
+        vec_free(exprs);
+
+        return true;
+    }
+
+    fold_leave:
     call = ast_call_new(sy->ops[vec_size(sy->ops)].ctx, fun);
 
     if (!call)
         return false;
-
-    if (fid+1 < vec_size(sy->out))
-        ++paramcount;
 
     if (fid+1 + paramcount != vec_size(sy->out)) {
         parseerror(parser, "internal error: parameter count mismatch: (%lu+1+%lu), %lu",
@@ -1635,7 +1654,7 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
     /* only warn once about an assignment in a truth value because the current code
      * would trigger twice on: if(a = b && ...), once for the if-truth-value, once for the && part
      */
-    bool warn_truthvalue = true;
+    bool warn_parenthesis = true;
 
     /* count the parens because an if starts with one, so the
      * end of a condition is an unmatched closing paren
@@ -1670,7 +1689,7 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
                 }
             }
             if (o == operator_count) {
-                compile_error(parser_ctx(parser), "unknown operator: %s", parser_tokval(parser));
+                compile_error(parser_ctx(parser), "unexpected operator: %s", parser_tokval(parser));
                 goto onerr;
             }
             /* found an operator */
@@ -1698,6 +1717,17 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
             if (vec_size(sy.ops) && !vec_last(sy.ops).isparen)
                 olast = &operators[vec_last(sy.ops).etype-1];
 
+            /* first only apply higher precedences, assoc_left+equal comes after we warn about precedence rules */
+            while (olast && op->prec < olast->prec)
+            {
+                if (!parser_sy_apply_operator(parser, &sy))
+                    goto onerr;
+                if (vec_size(sy.ops) && !vec_last(sy.ops).isparen)
+                    olast = &operators[vec_last(sy.ops).etype-1];
+                else
+                    olast = NULL;
+            }
+
 #define IsAssignOp(x) (\
                 (x) == opid1('=') || \
                 (x) == opid2('+','=') || \
@@ -1709,14 +1739,29 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
                 (x) == opid2('|','=') || \
                 (x) == opid3('&','~','=') \
                 )
-            if (warn_truthvalue) {
+            if (warn_parenthesis) {
                 if ( (olast && IsAssignOp(olast->id) && (op->id == opid2('&','&') || op->id == opid2('|','|'))) ||
                      (olast && IsAssignOp(op->id) && (olast->id == opid2('&','&') || olast->id == opid2('|','|'))) ||
                      (truthvalue && !vec_size(sy.paren) && IsAssignOp(op->id))
                    )
                 {
                     (void)!parsewarning(parser, WARN_PARENTHESIS, "suggesting parenthesis around assignment used as truth value");
-                    warn_truthvalue = false;
+                    warn_parenthesis = false;
+                }
+
+                if (olast && olast->id != op->id) {
+                    if ((op->id    == opid1('&') || op->id    == opid1('|') || op->id    == opid1('^')) &&
+                        (olast->id == opid1('&') || olast->id == opid1('|') || olast->id == opid1('^')))
+                    {
+                        (void)!parsewarning(parser, WARN_PARENTHESIS, "suggesting parenthesis around bitwise operations");
+                        warn_parenthesis = false;
+                    }
+                    else if ((op->id    == opid2('&','&') || op->id    == opid2('|','|')) &&
+                             (olast->id == opid2('&','&') || olast->id == opid2('|','|')))
+                    {
+                        (void)!parsewarning(parser, WARN_PARENTHESIS, "suggesting parenthesis around logical operations");
+                        warn_parenthesis = false;
+                    }
                 }
             }
 
@@ -1878,7 +1923,7 @@ static ast_expression* parse_expression_leave(parser_t *parser, bool stopatcomma
 
     parser->lex->flags.noops = true;
     if (vec_size(sy.out) != 1) {
-        parseerror(parser, "expression with not 1 but %lu output values...", (unsigned long) vec_size(sy.out));
+        parseerror(parser, "expression expected");
         expr = NULL;
     } else
         expr = sy.out[0].out;
@@ -2744,7 +2789,23 @@ static bool parse_qualifiers(parser_t *parser, bool with_local, int *cvq, bool *
             else if (!strcmp(parser_tokval(parser), "inline")) {
                 flags |= AST_FLAG_INLINE;
                 if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
-                    parseerror(parser, "`noref` attribute has no parameters, expected `]]`");
+                    parseerror(parser, "`inline` attribute has no parameters, expected `]]`");
+                    *cvq = CV_WRONG;
+                    return false;
+                }
+            }
+            else if (!strcmp(parser_tokval(parser), "eraseable")) {
+                flags |= AST_FLAG_ERASEABLE;
+                if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
+                    parseerror(parser, "`eraseable` attribute has no parameters, expected `]]`");
+                    *cvq = CV_WRONG;
+                    return false;
+                }
+            }
+            else if (!strcmp(parser_tokval(parser), "accumulate")) {
+                flags |= AST_FLAG_ACCUMULATE;
+                if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
+                    parseerror(parser, "`accumulate` attribute has no parameters, expected `]]`");
                     *cvq = CV_WRONG;
                     return false;
                 }
@@ -3242,7 +3303,13 @@ static bool parse_pragma_do(parser_t *parser)
     else
     {
         (void)!parsewarning(parser, WARN_UNKNOWN_PRAGMAS, "ignoring #pragma %s", parser_tokval(parser));
-        return false;
+
+        /* skip to eol */
+        while (!parse_eol(parser)) {
+            parser_next(parser);
+        }
+
+        return true;
     }
 
     return true;
@@ -3280,7 +3347,7 @@ static bool parse_statement(parser_t *parser, ast_block *block, ast_expression *
     if (parser->tok == TOKEN_IDENT)
         typevar = parser_find_typedef(parser, parser_tokval(parser), 0);
 
-    if (typevar || parser->tok == TOKEN_TYPENAME || parser->tok == '.')
+    if (typevar || parser->tok == TOKEN_TYPENAME || parser->tok == '.' || parser->tok == TOKEN_DOTS)
     {
         /* local variable */
         if (!block) {
@@ -3918,19 +3985,60 @@ static bool parse_function_body(parser_t *parser, ast_value *var)
         }
     }
 
-    if (var->hasvalue) {
+    if (var->hasvalue && !(var->expression.flags & AST_FLAG_ACCUMULATE)) {
         parseerror(parser, "function `%s` declared with multiple bodies", var->name);
         ast_block_delete(block);
         goto enderr;
     }
 
-    func = ast_function_new(ast_ctx(var), var->name, var);
+    /* accumulation? */
+    if (var->hasvalue && var->expression.vtype == TYPE_FUNCTION) {
+        ast_value    *accum    = NULL;
+        ast_function *previous = NULL;
+        char          acname[1024];
+
+        /* only void please */
+        if (var->expression.next->vtype != TYPE_VOID) {
+            parseerror(parser, "accumulated function `%s` declared with return type `%s` (accumulated functions must return void)",
+                var->name,
+                type_name[var->expression.next->vtype]
+            );
+            ast_block_delete(block);
+            goto enderr;
+        }
+
+        /* generate a new name increasing the accumulation count*/
+        util_snprintf(acname, sizeof(acname), "##ACCUMULATE_%s_%d", var->name, var->constval.vfunc->accumulation++);
+        accum = ast_value_new(parser_ctx(parser), acname, ((ast_expression*)var)->vtype);
+        if (!accum)
+            return false;
+
+        ast_type_adopt(accum, var);
+        func = ast_function_new(ast_ctx(var), NULL, accum);
+        if (!func)
+            return false;
+
+        parser_addglobal(parser, acname, (ast_expression*)accum);
+        vec_push(parser->functions, func);
+
+        /* update the previous calls accumulate pointer for the codegen */
+        previous = var->constval.vfunc;
+        while (previous->accumulate)
+            previous = previous->accumulate;
+
+        if (ast_istype(previous, ast_function))
+            previous->accumulate = func;
+
+    } else {
+        func = ast_function_new(ast_ctx(var), var->name, var);
+        vec_push(parser->functions, func);
+    }
+
     if (!func) {
         parseerror(parser, "failed to allocate function for `%s`", var->name);
         ast_block_delete(block);
         goto enderr;
     }
-    vec_push(parser->functions, func);
 
     parser_enterblock(parser);
 
@@ -4629,6 +4737,11 @@ static ast_value *parse_arraysize(parser_t *parser, ast_value *var)
  * The base type makes up every bit of type information which comes *before* the
  * variable name.
  *
+ * NOTE: The value must either be named, have a NULL name, or a name starting
+ *       with '<'. In the first case, this will be the actual variable or type
+ *       name, in the other cases it is assumed that the name will appear
+ *       later, and an error is generated otherwise.
+ *
  * The following will be parsed in its entirety:
  *     void() foo()
  * The 'basetype' in this case is 'void()'
@@ -4649,8 +4762,10 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
     ctx = parser_ctx(parser);
 
     /* types may start with a dot */
-    if (parser->tok == '.') {
+    if (parser->tok == '.' || parser->tok == TOKEN_DOTS) {
         isfield = true;
+        if (parser->tok == TOKEN_DOTS)
+            morefields += 2;
         /* if we parsed a dot we need a typename now */
         if (!parser_next(parser)) {
             parseerror(parser, "expected typename for field definition");
@@ -4660,8 +4775,13 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
         /* Further dots are handled seperately because they won't be part of the
          * basetype
          */
-        while (parser->tok == '.') {
-            ++morefields;
+        while (true) {
+            if (parser->tok == '.')
+                ++morefields;
+            else if (parser->tok == TOKEN_DOTS)
+                morefields += 3;
+            else
+                break;
             if (!parser_next(parser)) {
                 parseerror(parser, "expected typename for field definition");
                 return NULL;
@@ -4722,8 +4842,14 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
     }
 
     /* there may be a name now */
-    if (parser->tok == TOKEN_IDENT) {
+    if (parser->tok == TOKEN_IDENT || parser->tok == TOKEN_KEYWORD) {
+        if (!strcmp(parser_tokval(parser), "break"))
+            (void)!parsewarning(parser, WARN_BREAKDEF, "break definition ignored (suggest removing it)");
+        else if (parser->tok == TOKEN_KEYWORD)
+            goto leave;
+
         name = util_strdup(parser_tokval(parser));
+
         /* parse on */
         if (!parser_next(parser)) {
             ast_delete(var);
@@ -4733,6 +4859,7 @@ static ast_value *parse_typename(parser_t *parser, ast_value **storebase, ast_va
         }
     }
 
+    leave:
     /* now this may be an array */
     if (parser->tok == '[') {
         wasarray = true;
@@ -4788,6 +4915,13 @@ static bool parse_typedef(parser_t *parser)
 
     if (!typevar)
         return false;
+
+    /* while parsing types, the ast_value's get named '<something>' */
+    if (!typevar->name || typevar->name[0] == '<') {
+        parseerror(parser, "missing name in typedef");
+        ast_delete(typevar);
+        return false;
+    }
 
     if ( (old = parser_find_var(parser, typevar->name)) ) {
         parseerror(parser, "cannot define a type with the same name as a variable: %s\n"
@@ -4954,6 +5088,14 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
         return false;
     }
 
+    /* while parsing types, the ast_value's get named '<something>' */
+    if (!var->name || var->name[0] == '<') {
+        parseerror(parser, "declaration does not declare anything");
+        if (basetype)
+            ast_delete(basetype);
+        return false;
+    }
+
     while (true) {
         proto = NULL;
         wasarray = false;
@@ -5002,6 +5144,13 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
         if (var->expression.flags & AST_FLAG_DEPRECATED ||
             var->expression.flags & AST_FLAG_ALIAS)
             var->desc = vstring;
+
+        if (parser_find_global(parser, var->name) && var->expression.flags & AST_FLAG_ALIAS) {
+            parseerror(parser, "function aliases cannot be forward declared");
+            retval = false;
+            goto cleanup;
+        }
+
 
         /* Part 1:
          * check for validity: (end_sys_..., multiple-definitions, prototypes, ...)
@@ -5152,6 +5301,7 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                 retval = false;
                 goto cleanup;
             }
+            /* doing this here as the above is just for a single scope */
             old = parser_find_local(parser, var->name, 0, &isparam);
             if (old && isparam) {
                 if (parsewarning(parser, WARN_LOCAL_SHADOWS,
@@ -5164,8 +5314,12 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                 }
                 if (OPTS_OPTION_U32(OPTION_STANDARD) != COMPILER_GMQCC) {
                     ast_delete(var);
-                    var = NULL;
-                    goto skipvar;
+                    if (ast_istype(old, ast_value))
+                        var = proto = (ast_value*)old;
+                    else {
+                        var = NULL;
+                        goto skipvar;
+                    }
                 }
             }
         }
@@ -5220,7 +5374,7 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                             return false;
                         }
 
-                        if (var->expression.vtype != find->vtype) {
+                        if (!ast_compare_type((ast_expression*)var, find)) {
                             char ty1[1024];
                             char ty2[1024];
 
@@ -5425,16 +5579,8 @@ skipvar:
 
         if (parser->tok != '{' || var->expression.vtype != TYPE_FUNCTION) {
             if (parser->tok != '=') {
-                if (!strcmp(parser_tokval(parser), "break")) {
-                    if (!parser_next(parser)) {
-                        parseerror(parser, "error parsing break definition");
-                        break;
-                    }
-                    (void)!parsewarning(parser, WARN_BREAKDEF, "break definition ignored (suggest removing it)");
-                } else {
-                    parseerror(parser, "missing semicolon or initializer, got: `%s`", parser_tokval(parser));
-                    break;
-                }
+                parseerror(parser, "missing semicolon or initializer, got: `%s`", parser_tokval(parser));
+                break;
             }
 
             if (!parser_next(parser)) {
@@ -5687,7 +5833,7 @@ static bool parser_global_statement(parser_t *parser)
     if (parser->tok == TOKEN_IDENT)
         istype = parser_find_typedef(parser, parser_tokval(parser), 0);
 
-    if (istype || parser->tok == TOKEN_TYPENAME || parser->tok == '.')
+    if (istype || parser->tok == TOKEN_TYPENAME || parser->tok == '.' || parser->tok == TOKEN_DOTS)
     {
         return parse_variable(parser, NULL, false, CV_NONE, istype, false, false, 0, NULL);
     }
@@ -5826,7 +5972,7 @@ parser_t *parser_create()
         }
     }
     if (!parser->assign_op) {
-        printf("internal error: initializing parser: failed to find assign operator\n");
+        con_err("internal error: initializing parser: failed to find assign operator\n");
         mem_d(parser);
         return NULL;
     }
