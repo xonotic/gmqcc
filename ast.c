@@ -35,9 +35,7 @@
     }                                                               \
     ast_node_init((ast_node*)self, ctx, TYPE_##T);                  \
     ( (ast_node*)self )->destroy = (ast_node_delete*)destroyfn;     \
-    if (iterfn) {                                                   \
-        ( (ast_node*)self )->next_child = (ast_node_next_child*)iterfn; \
-    }
+    ( (ast_node*)self )->next_child = (ast_node_next_child*)iterfn
 
 /*
  * forward declarations, these need not be in ast.h for obvious
@@ -208,7 +206,7 @@ void ast_type_adopt_impl(ast_expression *self, const ast_expression *other)
 
 static ast_expression* ast_shallow_type(lex_ctx_t ctx, int vtype)
 {
-    ast_instantiate(ast_expression, ctx, ast_expression_delete_full, NULL);
+    ast_instantiate(ast_expression, ctx, ast_expression_delete_full, _ast_node_next_child);
     ast_expression_init(self, NULL);
     self->codegen = NULL;
     self->next    = NULL;
@@ -226,7 +224,7 @@ ast_expression* ast_type_copy(lex_ctx_t ctx, const ast_expression *ex)
         return NULL;
     else
     {
-        ast_instantiate(ast_expression, ctx, ast_expression_delete_full, NULL);
+        ast_instantiate(ast_expression, ctx, ast_expression_delete_full, _ast_node_next_child);
         ast_expression_init(self, NULL);
 
         fromex = ex;
