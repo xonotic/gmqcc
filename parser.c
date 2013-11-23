@@ -6128,6 +6128,7 @@ static void ast_iterator_begin(ast_iterator *iter, ast_node *start)
 {
     iter->head = start;
     iter->at = &iter->head;
+    iter->path = NULL;
     vec_push(iter->path, iter->at);
 }
 
@@ -6160,10 +6161,10 @@ static ast_node* ast_iterator_next(ast_iterator *iter)
 static void traverse_that_thing(ast_function *fun)
 {
 #if 1
+    ast_node    *at;
+    size_t       depth;
     ast_iterator iter;
     ast_iterator_begin(&iter, (ast_node*)fun);
-    ast_node *at;
-    size_t depth;
 
     for (at = (ast_node*)fun;
          at;
