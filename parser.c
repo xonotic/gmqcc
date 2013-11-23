@@ -6119,14 +6119,16 @@ void parser_cleanup(parser_t *parser)
 }
 
 typedef struct {
-    ast_node **path;
-    ast_node *at;
+    ast_node ***path;
+    ast_node **at;
+    ast_node *head;
 } ast_iterator;
 
 static void ast_iterator_begin(ast_iterator *iter, ast_node *start)
 {
-    iter->at = start;
-    vec_push(iter->path, start);
+    iter->head = start;
+    iter->at = &iter->head;
+    vec_push(iter->path, iter->at);
 }
 
 static void ast_iterator_delete(ast_iterator *iter)
@@ -6140,12 +6142,12 @@ static ast_node* ast_iterator_next(ast_iterator *iter)
 {
     size_t depth = vec_size(iter->path);
     while (depth) {
-        ast_node *last = vec_last(iter->path);
-        ast_node *next = ast_next_child(last, iter->at);
+        ast_node **last = vec_last(iter->path);
+        ast_node **next = ast_next_child(*last, iter->at);
         if (next) {
             vec_push(iter->path, next);
             iter->at = next;
-            return next;
+            return *next;
         }
         /* back up */
         iter->at = last;
@@ -6157,7 +6159,8 @@ static ast_node* ast_iterator_next(ast_iterator *iter)
 
 static void traverse_that_thing(ast_function *fun)
 {
-    ast_iterator iter = { NULL, (ast_node*)fun };
+#if 1
+    ast_iterator iter;
     ast_iterator_begin(&iter, (ast_node*)fun);
 
     for (ast_node *at = (ast_node*)fun;
@@ -6166,10 +6169,17 @@ static void traverse_that_thing(ast_function *fun)
     {
         for (size_t depth = vec_size(iter.path); depth; --depth)
             con_out("> ");
-        con_out("ast_%s\n", ast_node_type_name[at->nodetype]);
+        con_out("ast_%s (%p)\n", ast_node_type_name[at->nodetype], at);
     }
 
     ast_iterator_delete(&iter);
+#else
+    ast_iterator iter = { NULL, (ast_node*)fun };
+    ast_iterator_begin(&iter, (ast_node*)fun);
+    if (!fun)
+        ast_iterator_next(&iter);
+    ast_iterator_delete(&iter);
+#endif
 }
 
 bool parser_finish(parser_t *parser, const char *output)

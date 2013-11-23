@@ -44,60 +44,60 @@
  * static reasons.
  */
 static bool ast_member_codegen(ast_member*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_member_next_child(ast_member*,ast_node*);
+static ast_node** ast_member_next_child(ast_member*,ast_node**);
 static void ast_array_index_delete(ast_array_index*);
 static bool ast_array_index_codegen(ast_array_index*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_array_index_next_child(ast_array_index*,ast_node*);
+static ast_node** ast_array_index_next_child(ast_array_index*,ast_node**);
 static void ast_argpipe_delete(ast_argpipe*);
 static bool ast_argpipe_codegen(ast_argpipe*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_argpipe_next_child(ast_argpipe*,ast_node*);
+static ast_node** ast_argpipe_next_child(ast_argpipe*,ast_node**);
 static void ast_store_delete(ast_store*);
 static bool ast_store_codegen(ast_store*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_store_next_child(ast_store*,ast_node*);
+static ast_node** ast_store_next_child(ast_store*,ast_node**);
 static void ast_ifthen_delete(ast_ifthen*);
 static bool ast_ifthen_codegen(ast_ifthen*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_ifthen_next_child(ast_ifthen*,ast_node*);
+static ast_node** ast_ifthen_next_child(ast_ifthen*,ast_node**);
 static void ast_ternary_delete(ast_ternary*);
 static bool ast_ternary_codegen(ast_ternary*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_ternary_next_child(ast_ternary*,ast_node*);
+static ast_node** ast_ternary_next_child(ast_ternary*,ast_node**);
 static void ast_loop_delete(ast_loop*);
 static bool ast_loop_codegen(ast_loop*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_loop_next_child(ast_loop*,ast_node*);
+static ast_node** ast_loop_next_child(ast_loop*,ast_node**);
 static void ast_breakcont_delete(ast_breakcont*);
 static bool ast_breakcont_codegen(ast_breakcont*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_breakcont_next_child(ast_breakcont*,ast_node*);
+static ast_node** ast_breakcont_next_child(ast_breakcont*,ast_node**);
 static void ast_switch_delete(ast_switch*);
 static bool ast_switch_codegen(ast_switch*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_switch_next_child(ast_switch*,ast_node*);
+static ast_node** ast_switch_next_child(ast_switch*,ast_node**);
 static void ast_label_delete(ast_label*);
 static void ast_label_register_goto(ast_label*, ast_goto*);
 static bool ast_label_codegen(ast_label*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_label_next_child(ast_label*,ast_node*);
+static ast_node** ast_label_next_child(ast_label*,ast_node**);
 static bool ast_goto_codegen(ast_goto*, ast_function*, bool lvalue, ir_value**);
 static void ast_goto_delete(ast_goto*);
-static ast_node* ast_goto_next_child(ast_goto*,ast_node*);
+static ast_node** ast_goto_next_child(ast_goto*,ast_node**);
 static void ast_call_delete(ast_call*);
 static bool ast_call_codegen(ast_call*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_call_next_child(ast_call*,ast_node*);
+static ast_node** ast_call_next_child(ast_call*,ast_node**);
 static bool ast_block_codegen(ast_block*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_block_next_child(ast_block*,ast_node*);
+static ast_node** ast_block_next_child(ast_block*,ast_node**);
 static void ast_unary_delete(ast_unary*);
 static bool ast_unary_codegen(ast_unary*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_unary_next_child(ast_unary*,ast_node*);
+static ast_node** ast_unary_next_child(ast_unary*,ast_node**);
 static void ast_entfield_delete(ast_entfield*);
 static bool ast_entfield_codegen(ast_entfield*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_entfield_next_child(ast_entfield*,ast_node*);
+static ast_node** ast_entfield_next_child(ast_entfield*,ast_node**);
 static void ast_return_delete(ast_return*);
 static bool ast_return_codegen(ast_return*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_return_next_child(ast_return*,ast_node*);
+static ast_node** ast_return_next_child(ast_return*,ast_node**);
 static void ast_binstore_delete(ast_binstore*);
 static bool ast_binstore_codegen(ast_binstore*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_binstore_next_child(ast_binstore*,ast_node*);
+static ast_node** ast_binstore_next_child(ast_binstore*,ast_node**);
 static void ast_binary_delete(ast_binary*);
 static bool ast_binary_codegen(ast_binary*, ast_function*, bool lvalue, ir_value**);
-static ast_node* ast_binary_next_child(ast_binary*,ast_node*);
-static ast_node* ast_value_next_child(ast_value*,ast_node*);
-static ast_node* ast_function_next_child(ast_function*,ast_node*);
+static ast_node** ast_binary_next_child(ast_binary*,ast_node**);
+static ast_node** ast_value_next_child(ast_value*,ast_node**);
+static ast_node** ast_function_next_child(ast_function*,ast_node**);
 
 /* It must not be possible to get here. */
 static GMQCC_NORETURN void _ast_node_destroy(ast_node *self)
@@ -107,7 +107,7 @@ static GMQCC_NORETURN void _ast_node_destroy(ast_node *self)
     exit(EXIT_FAILURE);
 }
 
-static ast_node* _ast_node_next_child(ast_node *self, ast_node *prev)
+static ast_node** _ast_node_next_child(ast_node *self, ast_node **prev)
 {
     (void)self;
     (void)prev;
@@ -3430,199 +3430,199 @@ error:
 }
 
 /* iterator functions */
-static ast_node* ast_member_next_child(ast_member *self, ast_node *cur) {
+static ast_node** ast_member_next_child(ast_member *self, ast_node **cur) {
     (void)self; (void)cur;
     return NULL;
 }
 
-static ast_node* ast_value_next_child(ast_value *self, ast_node *cur) {
+static ast_node** ast_value_next_child(ast_value *self, ast_node **cur) {
     (void)self; (void)cur;
     return NULL;
 }
 
-static ast_node* ast_array_index_next_child(ast_array_index *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->array;
-    if (cur == (ast_node*)self->array)
-        return (ast_node*)self->index;
+static ast_node** ast_array_index_next_child(ast_array_index *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->array;
+    if (cur == (ast_node**)&self->array)
+        return (ast_node**)&self->index;
     return NULL;
 }
 
-static ast_node* ast_argpipe_next_child(ast_argpipe *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->index;
+static ast_node** ast_argpipe_next_child(ast_argpipe *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->index;
     return NULL;
 }
 
-static ast_node* ast_store_next_child(ast_store *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->dest;
-    if (cur == (ast_node*)self->dest)
-        return (ast_node*)self->source;
+static ast_node** ast_store_next_child(ast_store *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->dest;
+    if (cur == (ast_node**)&self->dest)
+        return (ast_node**)&self->source;
     return NULL;
 }
 
-static ast_node* ast_ifthen_next_child(ast_ifthen *self, ast_node *cur) {
-    if (cur == (ast_node*)self) {
-        if (self->cond)    return (ast_node*)self->cond;
-        if (self->on_true) return (ast_node*)self->on_true;
-        return (ast_node*)self->on_false;
+static ast_node** ast_ifthen_next_child(ast_ifthen *self, ast_node **cur) {
+    if (*cur == (ast_node*)self) {
+        if (self->cond)    return (ast_node**)&self->cond;
+        if (self->on_true) return (ast_node**)&self->on_true;
+        return (ast_node**)&self->on_false;
     }
-    if (self->cond && cur == (ast_node*)self->cond) {
-        if (self->on_true) return (ast_node*)self->on_true;
-        return (ast_node*)self->on_false;
+    if (self->cond && cur == (ast_node**)&self->cond) {
+        if (self->on_true) return (ast_node**)&self->on_true;
+        return (ast_node**)&self->on_false;
     }
-    if (self->on_true && cur == (ast_node*)self->on_true)
-        return (ast_node*)self->on_false;
+    if (self->on_true && cur == (ast_node**)&self->on_true)
+        return (ast_node**)&self->on_false;
     return NULL;
 }
 
-static ast_node* ast_ternary_next_child(ast_ternary *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->cond;
-    if (self->cond && cur == (ast_node*)self->cond)
-        return (ast_node*)self->on_true;
-    if (self->on_true && cur == (ast_node*)self->on_true)
-        return (ast_node*)self->on_false;
+static ast_node** ast_ternary_next_child(ast_ternary *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->cond;
+    if (self->cond && cur == (ast_node**)&self->cond)
+        return (ast_node**)&self->on_true;
+    if (self->on_true && cur == (ast_node**)&self->on_true)
+        return (ast_node**)&self->on_false;
     return NULL;
 }
 
-static ast_node* ast_loop_next_child(ast_loop *self, ast_node *cur) {
-    if (cur == (ast_node*)self) {
+static ast_node** ast_loop_next_child(ast_loop *self, ast_node **cur) {
+    if (*cur == (ast_node*)self) {
         /* If only we'd use ?: then this would be: return a ?: b ?: c ?: d; */
-        if (self->initexpr)  return (ast_node*)self->initexpr;
-        if (self->precond)   return (ast_node*)self->precond;
-        if (self->body)      return (ast_node*)self->body;
-        if (self->postcond)  return (ast_node*)self->postcond;
-        return (ast_node*)self->increment;
+        if (self->initexpr)  return (ast_node**)&self->initexpr;
+        if (self->precond)   return (ast_node**)&self->precond;
+        if (self->body)      return (ast_node**)&self->body;
+        if (self->postcond)  return (ast_node**)&self->postcond;
+        return (ast_node**)&self->increment;
     }
-    if (self->initexpr && cur == (ast_node*)self->initexpr) {
-        if (self->precond)   return (ast_node*)self->precond;
-        if (self->body)      return (ast_node*)self->body;
-        if (self->postcond)  return (ast_node*)self->postcond;
-        return (ast_node*)self->increment;
+    if (self->initexpr && cur == (ast_node**)&self->initexpr) {
+        if (self->precond)   return (ast_node**)&self->precond;
+        if (self->body)      return (ast_node**)&self->body;
+        if (self->postcond)  return (ast_node**)&self->postcond;
+        return (ast_node**)&self->increment;
     }
-    if (self->precond && cur == (ast_node*)self->precond) {
-        if (self->body)      return (ast_node*)self->body;
-        if (self->postcond)  return (ast_node*)self->postcond;
-        return (ast_node*)self->increment;
+    if (self->precond && cur == (ast_node**)&self->precond) {
+        if (self->body)      return (ast_node**)&self->body;
+        if (self->postcond)  return (ast_node**)&self->postcond;
+        return (ast_node**)&self->increment;
     }
-    if (self->body && cur == (ast_node*)self->body) {
-        if (self->postcond)  return (ast_node*)self->postcond;
-        return (ast_node*)self->increment;
+    if (self->body && cur == (ast_node**)&self->body) {
+        if (self->postcond)  return (ast_node**)&self->postcond;
+        return (ast_node**)&self->increment;
     }
     return NULL;
 }
 
-static ast_node* ast_breakcont_next_child(ast_breakcont *self, ast_node *cur) {
+static ast_node** ast_breakcont_next_child(ast_breakcont *self, ast_node **cur) {
     (void)self; (void)cur;
     return NULL;
 }
 
-static ast_node* ast_switch_next_child(ast_switch *self, ast_node *cur) {
+static ast_node** ast_switch_next_child(ast_switch *self, ast_node **cur) {
     size_t i, cases;
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->operand;
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->operand;
     cases = vec_size(self->cases);
     if (!cases)
         return NULL;
-    if (cur == (ast_node*)self->operand)
-        return (ast_node*)self->cases[0].value;
+    if (cur == (ast_node**)&self->operand)
+        return (ast_node**)&self->cases[0].value;
     for (i = 0; i != cases; ++i) {
-        if (cur == (ast_node*)self->cases[i].value)
-            return (ast_node*)self->cases[i].code;
-        if (cur == (ast_node*)self->cases[i].code) {
-            return (i+1 != cases) ? (ast_node*)self->cases[i+1].value
+        if (cur == (ast_node**)&self->cases[i].value)
+            return (ast_node**)&self->cases[i].code;
+        if (cur == (ast_node**)&self->cases[i].code) {
+            return (i+1 != cases) ? (ast_node**)&self->cases[i+1].value
                                   : NULL;
         }
     }
     return NULL;
 }
 
-static ast_node* ast_label_next_child(ast_label *self, ast_node *cur) {
+static ast_node** ast_label_next_child(ast_label *self, ast_node **cur) {
     (void)self; (void)cur;
     return NULL;
 }
 
-static ast_node* ast_goto_next_child(ast_goto *self, ast_node *cur) {
+static ast_node** ast_goto_next_child(ast_goto *self, ast_node **cur) {
     (void)self; (void)cur;
     return NULL;
 }
 
-static ast_node* ast_call_next_child(ast_call *self, ast_node *cur) {
+static ast_node** ast_call_next_child(ast_call *self, ast_node **cur) {
     size_t i, params;
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->func;
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->func;
     params = vec_size(self->params);
     if (!params)
         return NULL;
-    if (cur == (ast_node*)self->func)
-        return (ast_node*)self->params[0];
+    if (cur == (ast_node**)&self->func)
+        return (ast_node**)&self->params[0];
     for (i = 1; i != params; ++i) {
-        if (cur == (ast_node*)self->params[i-1])
-            return (ast_node*)self->params[i];
+        if (cur == (ast_node**)&self->params[i-1])
+            return (ast_node**)&self->params[i];
     }
     return NULL;
 }
 
-static ast_node* ast_block_next_child(ast_block *self, ast_node *cur) {
+static ast_node** ast_block_next_child(ast_block *self, ast_node **cur) {
     size_t i, exprs = vec_size(self->exprs);
     if (!exprs)
         return NULL;
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->exprs[0];
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->exprs[0];
     for (i = 1; i != exprs; ++i) {
-        if (cur == (ast_node*)self->exprs[i-1])
-            return (ast_node*)self->exprs[i];
+        if (cur == (ast_node**)&self->exprs[i-1])
+            return (ast_node**)&self->exprs[i];
     }
     return NULL;
 }
 
-static ast_node* ast_unary_next_child(ast_unary *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->operand;
+static ast_node** ast_unary_next_child(ast_unary *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->operand;
     return NULL;
 }
 
-static ast_node* ast_entfield_next_child(ast_entfield *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->entity;
-    if (cur == (ast_node*)self->entity)
-        return (ast_node*)self->field;
+static ast_node** ast_entfield_next_child(ast_entfield *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->entity;
+    if (cur == (ast_node**)&self->entity)
+        return (ast_node**)&self->field;
     return NULL;
 }
 
-static ast_node* ast_return_next_child(ast_return *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->operand;
+static ast_node** ast_return_next_child(ast_return *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->operand;
     return NULL;
 }
 
-static ast_node* ast_binstore_next_child(ast_binstore *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->dest;
-    if (cur == (ast_node*)self->dest)
-        return (ast_node*)self->source;
+static ast_node** ast_binstore_next_child(ast_binstore *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->dest;
+    if (cur == (ast_node**)&self->dest)
+        return (ast_node**)&self->source;
     return NULL;
 }
 
-static ast_node* ast_binary_next_child(ast_binary *self, ast_node *cur) {
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->left;
-    if (cur == (ast_node*)self->left)
-        return (ast_node*)self->right;
+static ast_node** ast_binary_next_child(ast_binary *self, ast_node **cur) {
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->left;
+    if (cur == (ast_node**)&self->left)
+        return (ast_node**)&self->right;
     return NULL;
 }
 
-static ast_node* ast_function_next_child(ast_function *self, ast_node *cur) {
+static ast_node** ast_function_next_child(ast_function *self, ast_node **cur) {
     size_t i, blocks = vec_size(self->blocks);
     if (!blocks)
         return NULL;
-    if (cur == (ast_node*)self)
-        return (ast_node*)self->blocks[0];
+    if (*cur == (ast_node*)self)
+        return (ast_node**)&self->blocks[0];
     for (i = 1; i != blocks; ++i) {
-        if (cur == (ast_node*)self->blocks[i-1])
-            return (ast_node*)self->blocks[i];
+        if (cur == (ast_node**)&self->blocks[i-1])
+            return (ast_node**)&self->blocks[i];
     }
     return NULL;
 }

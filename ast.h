@@ -134,7 +134,7 @@ static const char *ast_node_type_name[] = {
 /* Node interface with common components
  */
 typedef void ast_node_delete(ast_node*);
-typedef ast_node* ast_node_next_child(ast_node*,ast_node*);
+typedef ast_node** ast_node_next_child(ast_node*,ast_node**);
 struct ast_node_common
 {
     lex_ctx_t            context;
@@ -157,7 +157,7 @@ struct ast_node_common
     }                                  \
 } while(0)
 #define ast_next_child(x,y) \
-    (*( ((ast_node*)(x))->next_child ))((ast_node*)(x),(ast_node*)(y))
+    (*( ((ast_node*)(x))->next_child ))((ast_node*)(x),(ast_node**)(y))
 
 /* Expression interface
  *
