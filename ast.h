@@ -102,6 +102,31 @@ enum {
     TYPE_ast_argpipe      /* 21 */
 };
 
+static const char *ast_node_type_name[] = {
+    "node",
+    "expression",
+    "value",
+    "function",
+    "block",
+    "binary",
+    "store",
+    "binstore",
+    "entfield",
+    "ifthen",
+    "ternary",
+    "loop",
+    "call",
+    "unary",
+    "return",
+    "member",
+    "array_index",
+    "breakcont",
+    "switch",
+    "label",
+    "goto",
+    "argpipe"
+};
+
 #define ast_istype(x, t) ( ((ast_node*)x)->nodetype == (TYPE_##t) )
 #define ast_ctx(node) (((ast_node*)(node))->context)
 #define ast_side_effects(node) (((ast_node*)(node))->side_effects)
@@ -109,12 +134,14 @@ enum {
 /* Node interface with common components
  */
 typedef void ast_node_delete(ast_node*);
+typedef ast_node* ast_node_next_child(ast_node*,ast_node*);
 struct ast_node_common
 {
-    lex_ctx_t          context;
+    lex_ctx_t            context;
     /* I don't feel comfortable using keywords like 'delete' as names... */
-    ast_node_delete *destroy;
-    int              nodetype;
+    ast_node_delete     *destroy;
+    ast_node_next_child *next_child;
+    int                  nodetype;
     /* keep: if a node contains this node, 'keep'
      * prevents its dtor from destroying this node as well.
      */
@@ -129,6 +156,8 @@ struct ast_node_common
         ast_delete(x);                 \
     }                                  \
 } while(0)
+#define ast_next_child(x,y) \
+    (*( ((ast_node*)(x))->next_child ))((ast_node*)(x),(ast_node*)(y))
 
 /* Expression interface
  *

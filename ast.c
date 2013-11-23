@@ -28,53 +28,76 @@
 #include "ast.h"
 #include "parser.h"
 
-#define ast_instantiate(T, ctx, destroyfn)                          \
+#define ast_instantiate(T, ctx, destroyfn, iterfn)                  \
     T* self = (T*)mem_a(sizeof(T));                                 \
     if (!self) {                                                    \
         return NULL;                                                \
     }                                                               \
     ast_node_init((ast_node*)self, ctx, TYPE_##T);                  \
-    ( (ast_node*)self )->destroy = (ast_node_delete*)destroyfn
+    ( (ast_node*)self )->destroy = (ast_node_delete*)destroyfn;     \
+    if (iterfn) {                                                   \
+        ( (ast_node*)self )->next_child = (ast_node_next_child*)iterfn; \
+    }
 
 /*
  * forward declarations, these need not be in ast.h for obvious
  * static reasons.
  */
 static bool ast_member_codegen(ast_member*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_member_next_child(ast_member*,ast_node*);
 static void ast_array_index_delete(ast_array_index*);
 static bool ast_array_index_codegen(ast_array_index*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_array_index_next_child(ast_array_index*,ast_node*);
 static void ast_argpipe_delete(ast_argpipe*);
 static bool ast_argpipe_codegen(ast_argpipe*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_argpipe_next_child(ast_argpipe*,ast_node*);
 static void ast_store_delete(ast_store*);
 static bool ast_store_codegen(ast_store*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_store_next_child(ast_store*,ast_node*);
 static void ast_ifthen_delete(ast_ifthen*);
 static bool ast_ifthen_codegen(ast_ifthen*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_ifthen_next_child(ast_ifthen*,ast_node*);
 static void ast_ternary_delete(ast_ternary*);
 static bool ast_ternary_codegen(ast_ternary*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_ternary_next_child(ast_ternary*,ast_node*);
 static void ast_loop_delete(ast_loop*);
 static bool ast_loop_codegen(ast_loop*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_loop_next_child(ast_loop*,ast_node*);
 static void ast_breakcont_delete(ast_breakcont*);
 static bool ast_breakcont_codegen(ast_breakcont*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_breakcont_next_child(ast_breakcont*,ast_node*);
 static void ast_switch_delete(ast_switch*);
 static bool ast_switch_codegen(ast_switch*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_switch_next_child(ast_switch*,ast_node*);
 static void ast_label_delete(ast_label*);
 static void ast_label_register_goto(ast_label*, ast_goto*);
 static bool ast_label_codegen(ast_label*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_label_next_child(ast_label*,ast_node*);
 static bool ast_goto_codegen(ast_goto*, ast_function*, bool lvalue, ir_value**);
 static void ast_goto_delete(ast_goto*);
+static ast_node* ast_goto_next_child(ast_goto*,ast_node*);
 static void ast_call_delete(ast_call*);
 static bool ast_call_codegen(ast_call*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_call_next_child(ast_call*,ast_node*);
 static bool ast_block_codegen(ast_block*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_block_next_child(ast_block*,ast_node*);
 static void ast_unary_delete(ast_unary*);
 static bool ast_unary_codegen(ast_unary*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_unary_next_child(ast_unary*,ast_node*);
 static void ast_entfield_delete(ast_entfield*);
 static bool ast_entfield_codegen(ast_entfield*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_entfield_next_child(ast_entfield*,ast_node*);
 static void ast_return_delete(ast_return*);
 static bool ast_return_codegen(ast_return*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_return_next_child(ast_return*,ast_node*);
 static void ast_binstore_delete(ast_binstore*);
 static bool ast_binstore_codegen(ast_binstore*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_binstore_next_child(ast_binstore*,ast_node*);
 static void ast_binary_delete(ast_binary*);
 static bool ast_binary_codegen(ast_binary*, ast_function*, bool lvalue, ir_value**);
+static ast_node* ast_binary_next_child(ast_binary*,ast_node*);
+static ast_node* ast_value_next_child(ast_value*,ast_node*);
+static ast_node* ast_function_next_child(ast_function*,ast_node*);
 
 /* It must not be possible to get here. */
 static GMQCC_NORETURN void _ast_node_destroy(ast_node *self)
@@ -84,11 +107,19 @@ static GMQCC_NORETURN void _ast_node_destroy(ast_node *self)
     exit(EXIT_FAILURE);
 }
 
+static ast_node* _ast_node_next_child(ast_node *self, ast_node *prev)
+{
+    (void)self;
+    (void)prev;
+    return NULL;
+}
+
 /* Initialize main ast node aprts */
 static void ast_node_init(ast_node *self, lex_ctx_t ctx, int nodetype)
 {
     self->context = ctx;
     self->destroy = &_ast_node_destroy;
+    self->next_child = &_ast_node_next_child;
     self->keep    = false;
     self->nodetype = nodetype;
     self->side_effects = false;
@@ -177,7 +208,7 @@ void ast_type_adopt_impl(ast_expression *self, const ast_expression *other)
 
 static ast_expression* ast_shallow_type(lex_ctx_t ctx, int vtype)
 {
-    ast_instantiate(ast_expression, ctx, ast_expression_delete_full);
+    ast_instantiate(ast_expression, ctx, ast_expression_delete_full, NULL);
     ast_expression_init(self, NULL);
     self->codegen = NULL;
     self->next    = NULL;
@@ -195,7 +226,7 @@ ast_expression* ast_type_copy(lex_ctx_t ctx, const ast_expression *ex)
         return NULL;
     else
     {
-        ast_instantiate(ast_expression, ctx, ast_expression_delete_full);
+        ast_instantiate(ast_expression, ctx, ast_expression_delete_full, NULL);
         ast_expression_init(self, NULL);
 
         fromex = ex;
@@ -345,7 +376,7 @@ void ast_type_to_string(ast_expression *e, char *buf, size_t bufsize)
 static bool ast_value_codegen(ast_value *self, ast_function *func, bool lvalue, ir_value **out);
 ast_value* ast_value_new(lex_ctx_t ctx, const char *name, int t)
 {
-    ast_instantiate(ast_value, ctx, ast_value_delete);
+    ast_instantiate(ast_value, ctx, ast_value_delete, ast_value_next_child);
     ast_expression_init((ast_expression*)self,
                         (ast_expression_codegen*)&ast_value_codegen);
     self->expression.node.keep = true; /* keep */
@@ -438,7 +469,7 @@ bool ast_value_set_name(ast_value *self, const char *name)
 ast_binary* ast_binary_new(lex_ctx_t ctx, int op,
                            ast_expression* left, ast_expression* right)
 {
-    ast_instantiate(ast_binary, ctx, ast_binary_delete);
+    ast_instantiate(ast_binary, ctx, ast_binary_delete, ast_binary_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_binary_codegen);
 
     self->op = op;
@@ -484,7 +515,7 @@ void ast_binary_delete(ast_binary *self)
 ast_binstore* ast_binstore_new(lex_ctx_t ctx, int storop, int op,
                                ast_expression* left, ast_expression* right)
 {
-    ast_instantiate(ast_binstore, ctx, ast_binstore_delete);
+    ast_instantiate(ast_binstore, ctx, ast_binstore_delete, ast_binstore_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_binstore_codegen);
 
     ast_side_effects(self) = true;
@@ -512,7 +543,7 @@ void ast_binstore_delete(ast_binstore *self)
 ast_unary* ast_unary_new(lex_ctx_t ctx, int op,
                          ast_expression *expr)
 {
-    ast_instantiate(ast_unary, ctx, ast_unary_delete);
+    ast_instantiate(ast_unary, ctx, ast_unary_delete, ast_unary_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_unary_codegen);
 
     self->op      = op;
@@ -556,7 +587,7 @@ void ast_unary_delete(ast_unary *self)
 
 ast_return* ast_return_new(lex_ctx_t ctx, ast_expression *expr)
 {
-    ast_instantiate(ast_return, ctx, ast_return_delete);
+    ast_instantiate(ast_return, ctx, ast_return_delete, ast_return_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_return_codegen);
 
     self->operand = expr;
@@ -586,7 +617,7 @@ ast_entfield* ast_entfield_new(lex_ctx_t ctx, ast_expression *entity, ast_expres
 
 ast_entfield* ast_entfield_new_force(lex_ctx_t ctx, ast_expression *entity, ast_expression *field, const ast_expression *outtype)
 {
-    ast_instantiate(ast_entfield, ctx, ast_entfield_delete);
+    ast_instantiate(ast_entfield, ctx, ast_entfield_delete, ast_entfield_next_child);
 
     if (!outtype) {
         mem_d(self);
@@ -615,7 +646,7 @@ void ast_entfield_delete(ast_entfield *self)
 
 ast_member* ast_member_new(lex_ctx_t ctx, ast_expression *owner, unsigned int field, const char *name)
 {
-    ast_instantiate(ast_member, ctx, ast_member_delete);
+    ast_instantiate(ast_member, ctx, ast_member_delete, ast_member_next_child);
     if (field >= 3) {
         mem_d(self);
         return NULL;
@@ -678,7 +709,7 @@ bool ast_member_set_name(ast_member *self, const char *name)
 ast_array_index* ast_array_index_new(lex_ctx_t ctx, ast_expression *array, ast_expression *index)
 {
     ast_expression *outtype;
-    ast_instantiate(ast_array_index, ctx, ast_array_index_delete);
+    ast_instantiate(ast_array_index, ctx, ast_array_index_delete, ast_array_index_next_child);
 
     outtype = array->next;
     if (!outtype) {
@@ -720,7 +751,7 @@ void ast_array_index_delete(ast_array_index *self)
 
 ast_argpipe* ast_argpipe_new(lex_ctx_t ctx, ast_expression *index)
 {
-    ast_instantiate(ast_argpipe, ctx, ast_argpipe_delete);
+    ast_instantiate(ast_argpipe, ctx, ast_argpipe_delete, ast_argpipe_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_argpipe_codegen);
     self->index = index;
     self->expression.vtype = TYPE_NOEXPR;
@@ -737,7 +768,7 @@ void ast_argpipe_delete(ast_argpipe *self)
 
 ast_ifthen* ast_ifthen_new(lex_ctx_t ctx, ast_expression *cond, ast_expression *ontrue, ast_expression *onfalse)
 {
-    ast_instantiate(ast_ifthen, ctx, ast_ifthen_delete);
+    ast_instantiate(ast_ifthen, ctx, ast_ifthen_delete, ast_ifthen_next_child);
     if (!ontrue && !onfalse) {
         /* because it is invalid */
         mem_d(self);
@@ -771,7 +802,7 @@ void ast_ifthen_delete(ast_ifthen *self)
 ast_ternary* ast_ternary_new(lex_ctx_t ctx, ast_expression *cond, ast_expression *ontrue, ast_expression *onfalse)
 {
     ast_expression *exprtype = ontrue;
-    ast_instantiate(ast_ternary, ctx, ast_ternary_delete);
+    ast_instantiate(ast_ternary, ctx, ast_ternary_delete, ast_ternary_next_child);
     /* This time NEITHER must be NULL */
     if (!ontrue || !onfalse) {
         mem_d(self);
@@ -812,7 +843,7 @@ ast_loop* ast_loop_new(lex_ctx_t ctx,
                        ast_expression *increment,
                        ast_expression *body)
 {
-    ast_instantiate(ast_loop, ctx, ast_loop_delete);
+    ast_instantiate(ast_loop, ctx, ast_loop_delete, ast_loop_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_loop_codegen);
 
     self->initexpr  = initexpr;
@@ -856,7 +887,7 @@ void ast_loop_delete(ast_loop *self)
 
 ast_breakcont* ast_breakcont_new(lex_ctx_t ctx, bool iscont, unsigned int levels)
 {
-    ast_instantiate(ast_breakcont, ctx, ast_breakcont_delete);
+    ast_instantiate(ast_breakcont, ctx, ast_breakcont_delete, ast_breakcont_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_breakcont_codegen);
 
     self->is_continue = iscont;
@@ -873,7 +904,7 @@ void ast_breakcont_delete(ast_breakcont *self)
 
 ast_switch* ast_switch_new(lex_ctx_t ctx, ast_expression *op)
 {
-    ast_instantiate(ast_switch, ctx, ast_switch_delete);
+    ast_instantiate(ast_switch, ctx, ast_switch_delete, ast_switch_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_switch_codegen);
 
     self->operand = op;
@@ -902,7 +933,7 @@ void ast_switch_delete(ast_switch *self)
 
 ast_label* ast_label_new(lex_ctx_t ctx, const char *name, bool undefined)
 {
-    ast_instantiate(ast_label, ctx, ast_label_delete);
+    ast_instantiate(ast_label, ctx, ast_label_delete, ast_label_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_label_codegen);
 
     self->expression.vtype = TYPE_NOEXPR;
@@ -930,7 +961,7 @@ static void ast_label_register_goto(ast_label *self, ast_goto *g)
 
 ast_goto* ast_goto_new(lex_ctx_t ctx, const char *name)
 {
-    ast_instantiate(ast_goto, ctx, ast_goto_delete);
+    ast_instantiate(ast_goto, ctx, ast_goto_delete, ast_goto_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_goto_codegen);
 
     self->name    = util_strdup(name);
@@ -955,7 +986,7 @@ void ast_goto_set_label(ast_goto *self, ast_label *label)
 ast_call* ast_call_new(lex_ctx_t ctx,
                        ast_expression *funcexpr)
 {
-    ast_instantiate(ast_call, ctx, ast_call_delete);
+    ast_instantiate(ast_call, ctx, ast_call_delete, ast_call_next_child);
     if (!funcexpr->next) {
         compile_error(ctx, "not a function");
         mem_d(self);
@@ -1094,7 +1125,7 @@ bool ast_call_check_types(ast_call *self, ast_expression *va_type)
 ast_store* ast_store_new(lex_ctx_t ctx, int op,
                          ast_expression *dest, ast_expression *source)
 {
-    ast_instantiate(ast_store, ctx, ast_store_delete);
+    ast_instantiate(ast_store, ctx, ast_store_delete, ast_store_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_store_codegen);
 
     ast_side_effects(self) = true;
@@ -1118,7 +1149,7 @@ void ast_store_delete(ast_store *self)
 
 ast_block* ast_block_new(lex_ctx_t ctx)
 {
-    ast_instantiate(ast_block, ctx, ast_block_delete);
+    ast_instantiate(ast_block, ctx, ast_block_delete, ast_block_next_child);
     ast_expression_init((ast_expression*)self,
                         (ast_expression_codegen*)&ast_block_codegen);
 
@@ -1172,7 +1203,7 @@ void ast_block_set_type(ast_block *self, ast_expression *from)
 
 ast_function* ast_function_new(lex_ctx_t ctx, const char *name, ast_value *vtype)
 {
-    ast_instantiate(ast_function, ctx, ast_function_delete);
+    ast_instantiate(ast_function, ctx, ast_function_delete, ast_function_next_child);
 
     if (!vtype) {
         compile_error(ast_ctx(self), "internal error: ast_function_new condition 0");
@@ -3396,4 +3427,202 @@ bool ast_call_codegen(ast_call *self, ast_function *func, bool lvalue, ir_value 
 error:
     vec_free(params);
     return false;
+}
+
+/* iterator functions */
+static ast_node* ast_member_next_child(ast_member *self, ast_node *cur) {
+    (void)self; (void)cur;
+    return NULL;
+}
+
+static ast_node* ast_value_next_child(ast_value *self, ast_node *cur) {
+    (void)self; (void)cur;
+    return NULL;
+}
+
+static ast_node* ast_array_index_next_child(ast_array_index *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->array;
+    if (cur == (ast_node*)self->array)
+        return (ast_node*)self->index;
+    return NULL;
+}
+
+static ast_node* ast_argpipe_next_child(ast_argpipe *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->index;
+    return NULL;
+}
+
+static ast_node* ast_store_next_child(ast_store *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->dest;
+    if (cur == (ast_node*)self->dest)
+        return (ast_node*)self->source;
+    return NULL;
+}
+
+static ast_node* ast_ifthen_next_child(ast_ifthen *self, ast_node *cur) {
+    if (cur == (ast_node*)self) {
+        if (self->cond)    return (ast_node*)self->cond;
+        if (self->on_true) return (ast_node*)self->on_true;
+        return (ast_node*)self->on_false;
+    }
+    if (self->cond && cur == (ast_node*)self->cond) {
+        if (self->on_true) return (ast_node*)self->on_true;
+        return (ast_node*)self->on_false;
+    }
+    if (self->on_true && cur == (ast_node*)self->on_true)
+        return (ast_node*)self->on_false;
+    return NULL;
+}
+
+static ast_node* ast_ternary_next_child(ast_ternary *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->cond;
+    if (self->cond && cur == (ast_node*)self->cond)
+        return (ast_node*)self->on_true;
+    if (self->on_true && cur == (ast_node*)self->on_true)
+        return (ast_node*)self->on_false;
+    return NULL;
+}
+
+static ast_node* ast_loop_next_child(ast_loop *self, ast_node *cur) {
+    if (cur == (ast_node*)self) {
+        /* If only we'd use ?: then this would be: return a ?: b ?: c ?: d; */
+        if (self->initexpr)  return (ast_node*)self->initexpr;
+        if (self->precond)   return (ast_node*)self->precond;
+        if (self->body)      return (ast_node*)self->body;
+        if (self->postcond)  return (ast_node*)self->postcond;
+        return (ast_node*)self->increment;
+    }
+    if (self->initexpr && cur == (ast_node*)self->initexpr) {
+        if (self->precond)   return (ast_node*)self->precond;
+        if (self->body)      return (ast_node*)self->body;
+        if (self->postcond)  return (ast_node*)self->postcond;
+        return (ast_node*)self->increment;
+    }
+    if (self->precond && cur == (ast_node*)self->precond) {
+        if (self->body)      return (ast_node*)self->body;
+        if (self->postcond)  return (ast_node*)self->postcond;
+        return (ast_node*)self->increment;
+    }
+    if (self->body && cur == (ast_node*)self->body) {
+        if (self->postcond)  return (ast_node*)self->postcond;
+        return (ast_node*)self->increment;
+    }
+    return NULL;
+}
+
+static ast_node* ast_breakcont_next_child(ast_breakcont *self, ast_node *cur) {
+    (void)self; (void)cur;
+    return NULL;
+}
+
+static ast_node* ast_switch_next_child(ast_switch *self, ast_node *cur) {
+    size_t i, cases;
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->operand;
+    cases = vec_size(self->cases);
+    if (!cases)
+        return NULL;
+    if (cur == (ast_node*)self->operand)
+        return (ast_node*)self->cases[0].value;
+    for (i = 0; i != cases; ++i) {
+        if (cur == (ast_node*)self->cases[i].value)
+            return (ast_node*)self->cases[i].code;
+        if (cur == (ast_node*)self->cases[i].code) {
+            return (i+1 != cases) ? (ast_node*)self->cases[i+1].value
+                                  : NULL;
+        }
+    }
+    return NULL;
+}
+
+static ast_node* ast_label_next_child(ast_label *self, ast_node *cur) {
+    (void)self; (void)cur;
+    return NULL;
+}
+
+static ast_node* ast_goto_next_child(ast_goto *self, ast_node *cur) {
+    (void)self; (void)cur;
+    return NULL;
+}
+
+static ast_node* ast_call_next_child(ast_call *self, ast_node *cur) {
+    size_t i, params;
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->func;
+    params = vec_size(self->params);
+    if (!params)
+        return NULL;
+    if (cur == (ast_node*)self->func)
+        return (ast_node*)self->params[0];
+    for (i = 1; i != params; ++i) {
+        if (cur == (ast_node*)self->params[i-1])
+            return (ast_node*)self->params[i];
+    }
+    return NULL;
+}
+
+static ast_node* ast_block_next_child(ast_block *self, ast_node *cur) {
+    size_t i, exprs = vec_size(self->exprs);
+    if (!exprs)
+        return NULL;
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->exprs[0];
+    for (i = 1; i != exprs; ++i) {
+        if (cur == (ast_node*)self->exprs[i-1])
+            return (ast_node*)self->exprs[i];
+    }
+    return NULL;
+}
+
+static ast_node* ast_unary_next_child(ast_unary *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->operand;
+    return NULL;
+}
+
+static ast_node* ast_entfield_next_child(ast_entfield *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->entity;
+    if (cur == (ast_node*)self->entity)
+        return (ast_node*)self->field;
+    return NULL;
+}
+
+static ast_node* ast_return_next_child(ast_return *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->operand;
+    return NULL;
+}
+
+static ast_node* ast_binstore_next_child(ast_binstore *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->dest;
+    if (cur == (ast_node*)self->dest)
+        return (ast_node*)self->source;
+    return NULL;
+}
+
+static ast_node* ast_binary_next_child(ast_binary *self, ast_node *cur) {
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->left;
+    if (cur == (ast_node*)self->left)
+        return (ast_node*)self->right;
+    return NULL;
+}
+
+static ast_node* ast_function_next_child(ast_function *self, ast_node *cur) {
+    size_t i, blocks = vec_size(self->blocks);
+    if (!blocks)
+        return NULL;
+    if (cur == (ast_node*)self)
+        return (ast_node*)self->blocks[0];
+    for (i = 1; i != blocks; ++i) {
+        if (cur == (ast_node*)self->blocks[i-1])
+            return (ast_node*)self->blocks[i];
+    }
+    return NULL;
 }

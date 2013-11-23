@@ -6118,6 +6118,60 @@ void parser_cleanup(parser_t *parser)
     mem_d(parser);
 }
 
+typedef struct {
+    ast_node **path;
+    ast_node *at;
+} ast_iterator;
+
+static void ast_iterator_begin(ast_iterator *iter, ast_node *start)
+{
+    iter->at = start;
+    vec_push(iter->path, start);
+}
+
+static void ast_iterator_delete(ast_iterator *iter)
+{
+    if (iter->path) {
+        vec_free(iter->path);
+    }
+}
+
+static ast_node* ast_iterator_next(ast_iterator *iter)
+{
+    size_t depth = vec_size(iter->path);
+    while (depth) {
+        ast_node *last = vec_last(iter->path);
+        ast_node *next = ast_next_child(last, iter->at);
+        if (next) {
+            vec_push(iter->path, next);
+            iter->at = next;
+            return next;
+        }
+        /* back up */
+        iter->at = last;
+        vec_pop(iter->path);
+        --depth;
+    }
+    return NULL;
+}
+
+static void traverse_that_thing(ast_function *fun)
+{
+    ast_iterator iter = { NULL, (ast_node*)fun };
+    ast_iterator_begin(&iter, (ast_node*)fun);
+
+    for (ast_node *at = (ast_node*)fun;
+         at;
+         at = ast_iterator_next(&iter))
+    {
+        for (size_t depth = vec_size(iter.path); depth; --depth)
+            con_out("> ");
+        con_out("ast_%s\n", ast_node_type_name[at->nodetype]);
+    }
+
+    ast_iterator_delete(&iter);
+}
+
 bool parser_finish(parser_t *parser, const char *output)
 {
     size_t i;
@@ -6264,7 +6318,9 @@ bool parser_finish(parser_t *parser, const char *output)
             ir_builder_delete(ir);
             return false;
         }
+        traverse_that_thing(parser->functions[i]);
     }
+
     parser_remove_ast(parser);
 
     if (compile_Werrors) {
