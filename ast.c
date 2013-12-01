@@ -470,6 +470,21 @@ ast_binary* ast_binary_new(lex_ctx_t ctx, int op,
     ast_instantiate(ast_binary, ctx, ast_binary_delete, ast_binary_next_child);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_binary_codegen);
 
+    if (ast_istype(right, ast_unary) && OPTS_OPTIMIZATION(OPTIM_PEEPHOLE)) {
+        ast_expression *normal = ((ast_unary*)right)->operand;
+
+        /* make a-(-b) => a + b */
+        if (op == INSTR_SUB_F) {
+            op = INSTR_ADD_F;
+            right = normal;
+            ++opts_optimizationcount[OPTIM_PEEPHOLE];
+        } else if (op == INSTR_SUB_V) {
+            op = INSTR_ADD_V;
+            right = normal;
+            ++opts_optimizationcount[OPTIM_PEEPHOLE];
+        }
+    }
+
     self->op = op;
     self->left = left;
     self->right = right;
@@ -1207,7 +1222,6 @@ ast_function* ast_function_new(lex_ctx_t ctx, const char *name, ast_value *vtype
         compile_error(ast_ctx(self), "internal error: ast_function_new condition 0");
         goto cleanup;
     } else if (vtype->hasvalue || vtype->expression.vtype != TYPE_FUNCTION) {
-    } else if (vtype->hasvalue || vtype->expression.vtype != TYPE_FUNCTION) {
         compile_error(ast_ctx(self), "internal error: ast_function_new condition %i %i type=%i (probably 2 bodies?)",
                  (int)!vtype,
                  (int)vtype->hasvalue,
@@ -1236,6 +1250,9 @@ ast_function* ast_function_new(lex_ctx_t ctx, const char *name, ast_value *vtype
     self->fixedparams      = NULL;
     self->return_value     = NULL;
 
+    self->static_names     = NULL;
+    self->static_count     = 0;
+
     return self;
 
 cleanup:
@@ -1257,6 +1274,9 @@ void ast_function_delete(ast_function *self)
          */
         ast_unref(self->vtype);
     }
+    for (i = 0; i < vec_size(self->static_names); ++i)
+        mem_d(self->static_names[i]);
+    vec_free(self->static_names);
     for (i = 0; i < vec_size(self->blocks); ++i)
         ast_delete(self->blocks[i]);
     vec_free(self->blocks);

@@ -402,7 +402,7 @@ typedef struct hash_node_t {
  */
 #if 1
 #define GMQCC_ROTL32(X, R) (((X) << (R)) | ((X) >> (32 - (R))))
-GMQCC_INLINE size_t util_hthash(hash_table_t *ht, const char *key) {
+size_t util_hthash(hash_table_t *ht, const char *key) {
     const unsigned char *data   = (const unsigned char *)key;
     const size_t         len    = strlen(key);
     const size_t         block  = len / 4;
@@ -685,7 +685,7 @@ void util_htdel(hash_table_t *ht) {
  * information.
  */
 static void stat_dump_mem_contents(stat_mem_block_t *block, uint16_t cols) {
-    unsigned char *buffer = mem_a(cols);
+    unsigned char *buffer = (unsigned char *)mem_a(cols);
     unsigned char *memory = (unsigned char *)(block + 1);
     size_t         i;
 

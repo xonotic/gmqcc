@@ -230,6 +230,7 @@ fold_t *fold_init(parser_t *parser) {
     (void)fold_constgen_float (fold,  0.0f);
     (void)fold_constgen_float (fold,  1.0f);
     (void)fold_constgen_float (fold, -1.0f);
+    (void)fold_constgen_float (fold,  2.0f);
 
     (void)fold_constgen_vector(fold, vec3_create(0.0f, 0.0f, 0.0f));
     (void)fold_constgen_vector(fold, vec3_create(-1.0f, -1.0f, -1.0f));
@@ -605,10 +606,15 @@ static GMQCC_INLINE ast_expression *fold_op_lteqgt(fold_t *fold, ast_value *a, a
 
 static GMQCC_INLINE ast_expression *fold_op_cmp(fold_t *fold, ast_value *a, ast_value *b, bool ne) {
     if (fold_can_2(a, b)) {
-        if (isfloat(a) && isfloat(b))
-            return fold_constgen_float(fold, ne != (fold_immvalue_float(a) == fold_immvalue_float(b)));
-        if (isvector(a) && isvector(b))
-            return fold_constgen_float(fold, ne != vec3_cmp(fold_immvalue_vector(a), fold_immvalue_vector(b)));
+        if (isfloat(a) && isfloat(b)) {
+            float la = fold_immvalue_float(a);
+            float lb = fold_immvalue_float(b);
+            return (ast_expression*)fold->imm_float[!(ne ? la == lb : la != lb)];
+        } if (isvector(a) && isvector(b)) {
+            vec3_t la = fold_immvalue_vector(a);
+            vec3_t lb = fold_immvalue_vector(b);
+            return (ast_expression*)fold->imm_float[!(ne ? vec3_cmp(la, lb) : !vec3_cmp(la, lb))];
+        }
     }
     return NULL;
 }
@@ -701,46 +707,69 @@ ast_expression *fold_op(fold_t *fold, const oper_info *info, ast_expression **op
  * folding, primarly: individual functions for each intrinsics to fold,
  * and a generic selection function.
  */
+static GMQCC_INLINE ast_expression *fold_intrin_isfinite(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, isfinite(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_isinf(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, isinf(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_isnan(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, isnan(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_isnormal(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, isnormal(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_signbit(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, signbit(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intirn_acosh(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, acoshf(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_asinh(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, asinhf(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_atanh(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, atanhf(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_exp(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, expf(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_exp2(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, exp2f(fold_immvalue_float(a)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_expm1(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, expm1f(fold_immvalue_float(a)));
+}
 static GMQCC_INLINE ast_expression *fold_intrin_mod(fold_t *fold, ast_value *lhs, ast_value *rhs) {
-    return fold_constgen_float(
-                fold,
-                fmodf(
-                    fold_immvalue_float(lhs),
-                    fold_immvalue_float(rhs)
-                )
-            );
+    return fold_constgen_float(fold, fmodf(fold_immvalue_float(lhs), fold_immvalue_float(rhs)));
 }
-
 static GMQCC_INLINE ast_expression *fold_intrin_pow(fold_t *fold, ast_value *lhs, ast_value *rhs) {
-    return fold_constgen_float(
-                fold,
-                powf(
-                    fold_immvalue_float(lhs),
-                    fold_immvalue_float(rhs)
-                )
-            );
+    return fold_constgen_float(fold, powf(fold_immvalue_float(lhs), fold_immvalue_float(rhs)));
+}
+static GMQCC_INLINE ast_expression *fold_intrin_fabs(fold_t *fold, ast_value *a) {
+    return fold_constgen_float(fold, fabsf(fold_immvalue_float(a)));
 }
 
-static GMQCC_INLINE ast_expression *fold_intrin_exp(fold_t *fold, ast_value *value) {
-    return fold_constgen_float(fold, exp(fold_immvalue_float(value)));
-}
-
-static GMQCC_INLINE ast_expression *fold_intrin_isnan(fold_t *fold, ast_value *value) {
-    return fold_constgen_float(fold, isnan(fold_immvalue_float(value)) != 0.0f);
-}
-
-static GMQCC_INLINE ast_expression *fold_intrin_fabs(fold_t *fold, ast_value *value) {
-    return fold_constgen_float(fold, fabs(fold_immvalue_float(value)));
-}
 
 ast_expression *fold_intrin(fold_t *fold, const char *intrin, ast_expression **arg) {
     ast_expression *ret = NULL;
+    ast_value      *a   = (ast_value*)arg[0];
+    ast_value      *b   = (ast_value*)arg[1];
 
-    if (!strcmp(intrin, "mod"))   ret = fold_intrin_mod  (fold, (ast_value*)arg[0], (ast_value*)arg[1]);
-    if (!strcmp(intrin, "pow"))   ret = fold_intrin_pow  (fold, (ast_value*)arg[0], (ast_value*)arg[1]);
-    if (!strcmp(intrin, "exp"))   ret = fold_intrin_exp  (fold, (ast_value*)arg[0]);
-    if (!strcmp(intrin, "isnan")) ret = fold_intrin_isnan(fold, (ast_value*)arg[0]);
-    if (!strcmp(intrin, "fabs"))  ret = fold_intrin_fabs (fold, (ast_value*)arg[0]);
+    if (!strcmp(intrin, "isfinite")) ret = fold_intrin_isfinite(fold, a);
+    if (!strcmp(intrin, "isinf"))    ret = fold_intrin_isinf(fold, a);
+    if (!strcmp(intrin, "isnan"))    ret = fold_intrin_isnan(fold, a);
+    if (!strcmp(intrin, "isnormal")) ret = fold_intrin_isnormal(fold, a);
+    if (!strcmp(intrin, "signbit"))  ret = fold_intrin_signbit(fold, a);
+    if (!strcmp(intrin, "acosh"))    ret = fold_intirn_acosh(fold, a);
+    if (!strcmp(intrin, "asinh"))    ret = fold_intrin_asinh(fold, a);
+    if (!strcmp(intrin, "atanh"))    ret = fold_intrin_atanh(fold, a);
+    if (!strcmp(intrin, "exp"))      ret = fold_intrin_exp(fold, a);
+    if (!strcmp(intrin, "exp2"))     ret = fold_intrin_exp2(fold, a);
+    if (!strcmp(intrin, "expm1"))    ret = fold_intrin_expm1(fold, a);
+    if (!strcmp(intrin, "mod"))      ret = fold_intrin_mod(fold, a, b);
+    if (!strcmp(intrin, "pow"))      ret = fold_intrin_pow(fold, a, b);
+    if (!strcmp(intrin, "fabs"))     ret = fold_intrin_fabs(fold, a);
 
     if (ret)
         ++opts_optimizationcount[OPTIM_CONST_FOLD];

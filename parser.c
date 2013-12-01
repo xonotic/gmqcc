@@ -1584,6 +1584,23 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
                 var = intrin_func(parser->intrin, parser_tokval(parser));
             }
 
+            /*
+             * Try it again, intrin_func deals with the alias method as well
+             * the first one masks for __builtin though, we emit warning here.
+             */
+            if (!var) {
+                if ((var = intrin_func(parser->intrin, parser_tokval(parser)))) {
+                    (void)!compile_warning(
+                        parser_ctx(parser),
+                        WARN_BUILTINS,
+                        "using implicitly defined builtin `__builtin_%s' for `%s'",
+                        parser_tokval(parser),
+                        parser_tokval(parser)
+                    );
+                }
+            }
+
+
             if (!var) {
                 char *correct = NULL;
                 size_t i;
@@ -5424,6 +5441,7 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                      */
                     char   *defname = NULL;
                     size_t  prefix_len, ln;
+                    size_t  sn, sn_size;
 
                     ln = strlen(parser->function->name);
                     vec_append(defname, ln, parser->function->name);
@@ -5445,6 +5463,24 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                     /* now rename the global */
                     ln = strlen(var->name);
                     vec_append(defname, ln, var->name);
+                    /* if a variable of that name already existed, add the
+                     * counter value.
+                     * The counter is incremented either way.
+                     */
+                    sn_size = vec_size(parser->function->static_names);
+                    for (sn = 0; sn != sn_size; ++sn) {
+                        if (strcmp(parser->function->static_names[sn], var->name) == 0)
+                            break;
+                    }
+                    if (sn != sn_size) {
+                        char *num = NULL;
+                        int   len = util_asprintf(&num, "#%u", parser->function->static_count);
+                        vec_append(defname, len, num);
+                        mem_d(num);
+                    }
+                    else
+                        vec_push(parser->function->static_names, util_strdup(var->name));
+                    parser->function->static_count++;
                     ast_value_set_name(var, defname);
 
                     /* push it to the to-be-generated globals */
@@ -5695,17 +5731,18 @@ skipvar:
             if (!cexp)
                 break;
 
-            if (!localblock) {
+            if (!localblock || is_static) {
                 cval = (ast_value*)cexp;
                 if (cval != parser->nil &&
                     (!ast_istype(cval, ast_value) || ((!cval->hasvalue || cval->cvq != CV_CONST) && !cval->isfield))
                    )
                 {
-                    parseerror(parser, "cannot initialize a global constant variable with a non-constant expression");
+                    parseerror(parser, "initializer is non constant");
                 }
                 else
                 {
-                    if (!OPTS_FLAG(INITIALIZED_NONCONSTANTS) &&
+                    if (!is_static &&
+                        !OPTS_FLAG(INITIALIZED_NONCONSTANTS) &&
                         qualifier != CV_VAR)
                     {
                         var->cvq = CV_CONST;

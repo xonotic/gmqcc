@@ -82,91 +82,8 @@ static bool lexwarn(lex_file *lex, int warntype, const char *fmt, ...)
     return r;
 }
 
-
-#if 0
-token* token_new()
-{
-    token *tok = (token*)mem_a(sizeof(token));
-    if (!tok)
-        return NULL;
-    memset(tok, 0, sizeof(*tok));
-    return tok;
-}
-
-void token_delete(token *self)
-{
-    if (self->next && self->next->prev == self)
-        self->next->prev = self->prev;
-    if (self->prev && self->prev->next == self)
-        self->prev->next = self->next;
-    MEM_VECTOR_CLEAR(self, value);
-    mem_d(self);
-}
-
-token* token_copy(const token *cp)
-{
-    token* self = token_new();
-    if (!self)
-        return NULL;
-    /* copy the value */
-    self->value_alloc = cp->value_count + 1;
-    self->value_count = cp->value_count;
-    self->value = (char*)mem_a(self->value_alloc);
-    if (!self->value) {
-        mem_d(self);
-        return NULL;
-    }
-    memcpy(self->value, cp->value, cp->value_count);
-    self->value[self->value_alloc-1] = 0;
-
-    /* rest */
-    self->ctx = cp->ctx;
-    self->ttype = cp->ttype;
-    memcpy(&self->constval, &cp->constval, sizeof(self->constval));
-    return self;
-}
-
-void token_delete_all(token *t)
-{
-    token *n;
-
-    do {
-        n = t->next;
-        token_delete(t);
-        t = n;
-    } while(t);
-}
-
-token* token_copy_all(const token *cp)
-{
-    token *cur;
-    token *out;
-
-    out = cur = token_copy(cp);
-    if (!out)
-        return NULL;
-
-    while (cp->next) {
-        cp = cp->next;
-        cur->next = token_copy(cp);
-        if (!cur->next) {
-            token_delete_all(out);
-            return NULL;
-        }
-        cur->next->prev = cur;
-        cur = cur->next;
-    }
-
-    return out;
-}
-#else
 static void lex_token_new(lex_file *lex)
 {
-#if 0
-    if (lex->tok)
-        token_delete(lex->tok);
-    lex->tok = token_new();
-#else
     if (lex->tok.value)
         vec_shrinkto(lex->tok.value, 0);
 
@@ -174,14 +91,16 @@ static void lex_token_new(lex_file *lex)
     lex->tok.ctx.line    = lex->sline;
     lex->tok.ctx.file    = lex->name;
     lex->tok.ctx.column  = lex->column;
-#endif
 }
-#endif
+
+static void lex_ungetch(lex_file *lex, int ch);
+static int lex_getch(lex_file *lex);
 
 lex_file* lex_open(const char *file)
 {
     lex_file  *lex;
     fs_file_t *in = fs_file_open(file, "rb");
+    uint32_t   read;
 
     if (!in) {
         lexerror(NULL, "open failed: '%s'\n", file);
@@ -203,6 +122,19 @@ lex_file* lex_open(const char *file)
     lex->column  = 0;
     lex->peekpos = 0;
     lex->eof     = false;
+
+    /* handle BOM */
+    if ((read = (lex_getch(lex) << 16) | (lex_getch(lex) << 8) | lex_getch(lex)) != 0xEFBBBF) {
+        lex_ungetch(lex, (read & 0x0000FF));
+        lex_ungetch(lex, (read & 0x00FF00) >> 8);
+        lex_ungetch(lex, (read & 0xFF0000) >> 16);
+    } else {
+        /*
+         * otherwise the lexer has advanced 3 bytes for the BOM, we need
+         * to set the column back to 0
+         */
+        lex->column = 0;
+    }
 
     vec_push(lex_filenames, lex->name);
     return lex;
@@ -256,15 +188,14 @@ void lex_close(lex_file *lex)
 
     if (lex->file)
         fs_file_close(lex->file);
-#if 0
-    if (lex->tok)
-        token_delete(lex->tok);
-#else
+
     vec_free(lex->tok.value);
-#endif
+
     /* mem_d(lex->name); collected in lex_filenames */
     mem_d(lex);
 }
+
+
 
 static int lex_fgetc(lex_file *lex)
 {
@@ -286,7 +217,6 @@ static int lex_fgetc(lex_file *lex)
  * are working on.
  * The are merely wrapping get/put in order to count line numbers.
  */
-static void lex_ungetch(lex_file *lex, int ch);
 static int lex_try_trigraph(lex_file *lex, int old)
 {
     int c2, c3;
@@ -606,10 +536,6 @@ static int lex_skipwhite(lex_file *lex, bool hadwhite)
 
                 if (lex->flags.preprocessing) {
                     haswhite = true;
-                    /*
-                    lex_tokench(lex, '/');
-                    lex_tokench(lex, '/');
-                    */
                     lex_tokench(lex, ' ');
                     lex_tokench(lex, ' ');
                 }
@@ -631,10 +557,6 @@ static int lex_skipwhite(lex_file *lex, bool hadwhite)
                 /* multiline comment */
                 if (lex->flags.preprocessing) {
                     haswhite = true;
-                    /*
-                    lex_tokench(lex, '/');
-                    lex_tokench(lex, '*');
-                    */
                     lex_tokench(lex, ' ');
                     lex_tokench(lex, ' ');
                 }
@@ -646,10 +568,6 @@ static int lex_skipwhite(lex_file *lex, bool hadwhite)
                         ch = lex_getch(lex);
                         if (ch == '/') {
                             if (lex->flags.preprocessing) {
-                                /*
-                                lex_tokench(lex, '*');
-                                lex_tokench(lex, '/');
-                                */
                                 lex_tokench(lex, ' ');
                                 lex_tokench(lex, ' ');
                             }
@@ -661,7 +579,7 @@ static int lex_skipwhite(lex_file *lex, bool hadwhite)
                         if (ch == '\n')
                             lex_tokench(lex, '\n');
                         else
-                            lex_tokench(lex, ' '); /* ch); */
+                            lex_tokench(lex, ' ');
                     }
                 }
                 ch = ' '; /* cause TRUE in the isspace check */
@@ -1008,10 +926,6 @@ int lex_do(lex_file *lex)
     bool hadwhite = false;
 
     lex_token_new(lex);
-#if 0
-    if (!lex->tok)
-        return TOKEN_FATAL;
-#endif
 
     while (true) {
         ch = lex_skipwhite(lex, hadwhite);
@@ -1256,10 +1170,6 @@ int lex_do(lex_file *lex)
          */
         switch (ch)
         {
-            /*
-            case '+':
-            case '-':
-            */
             case '*':
             case '/':
             case '<':
@@ -1366,15 +1276,6 @@ int lex_do(lex_file *lex)
         lex_endtoken(lex);
         return (lex->tok.ttype = TOKEN_OPERATOR);
     }
-
-    /*
-    if (ch == '^' || ch == '~' || ch == '!')
-    {
-        lex_tokench(lex, ch);
-        lex_endtoken(lex);
-        return (lex->tok.ttype = TOKEN_OPERATOR);
-    }
-    */
 
     if (ch == '*' || ch == '/') /* *=, /= */
     {
