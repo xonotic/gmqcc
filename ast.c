@@ -3447,7 +3447,36 @@ error:
     return false;
 }
 
-/* iterator functions */
+/* AST iterator + iterator functions */
+void ast_iterator_begin(ast_iterator *iter, ast_node *start) {
+    iter->head = start;
+    iter->at = &iter->head;
+    iter->path = NULL;
+    vec_push(iter->path, iter->at);
+}
+
+void ast_iterator_delete(ast_iterator *iter) {
+    if (iter->path)
+        vec_free(iter->path);
+}
+
+ast_node *ast_iterator_next(ast_iterator *iter) {
+    size_t depth = vec_size(iter->path);
+    while (depth) {
+        ast_node **last = vec_last(iter->path);
+        ast_node **next = ast_next_child(*last, iter->at);
+        if (next) {
+            vec_push(iter->path, next);
+            iter->at = next;
+            return *next;
+        }
+        iter->at = last;
+        vec_pop(iter->path);
+        --depth;
+    }
+    return NULL;
+}
+
 static ast_node** ast_member_next_child(ast_member *self, ast_node **cur) {
     (void)self; (void)cur;
     return NULL;

@@ -708,4 +708,15 @@ bool ast_generate_accessors(ast_value *asvalue, ir_builder *ir);
  * all the flags.
  */
 typedef int static_assert_is_ast_flag_safe [((AST_FLAG_LAST) <= (ast_flag_t)(-1)) ? 1 : -1];
+
+/* AST iterator */
+typedef struct {
+    ast_node ***path;
+    ast_node **at;
+    ast_node *head;
+} ast_iterator;
+
+void      ast_iterator_begin(ast_iterator *iter, ast_node *start);
+void      ast_iterator_delete(ast_iterator *iter);
+ast_node *ast_iterator_next(ast_iterator *iter);
 #endif
