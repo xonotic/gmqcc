@@ -102,7 +102,7 @@ enum {
     TYPE_ast_argpipe      /* 21 */
 };
 
-static const char *ast_node_type_name[] = {
+static const char * const ast_node_type_name[] = {
     "node",
     "expression",
     "value",
