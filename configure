@@ -1,0 +1,325 @@
+#!/usr/bin/bash
+# vim: ts=2 sts=2 sw=2 et:
+
+progname="$0"
+
+#
+# Object lists
+#
+
+# all_c_obj will be filled by print_objects
+all_c_obj=()
+
+# executables is an array of variable names used in the makefile to
+# name an executable; the list of objects is assumed to be
+# in ${var}_OBJ
+executables=(GMQCC QCVM TESTSUITE PAK)
+print_all_rule() {
+  printf 'all:'
+  for i in "${executables[@]}"; do
+    printf ' $(%s)' "$i"
+  done
+  echo
+}
+
+# create all the object variables:
+print_objects() {
+  local common=(ansi.o util.o hash.o stat.o fs.o opts.o conout.o)
+    all_c_obj+=("${common[@]}")
+  local gmqcc=(main.o utf8.o
+               lexer.o parser.o ftepp.o
+               fold.o intrin.o correct.o
+               ast.o ir.o code.o)
+    all_c_obj+=("${gmqcc[@]}")
+  local qcvm=(exec.o)
+    all_c_obj+=("${qcvm[@]}")
+  local testsuite=(test.o)
+    all_c_obj+=("${testsuite[@]}")
+  local pak=(pak.o)
+    all_c_obj+=("${pak[@]}")
+  cat <<EOF
+GMQCC     = gmqcc${cf_exesuffix}
+QCVM      = qcvm${cf_exesuffix}
+TESTSUITE = testsuite${cf_exesuffix}
+PAK       = pak${cf_exesuffix}
+
+QCVM_OBJ      := ${common[@]} ${qcvm[@]}
+GMQCC_OBJ     := ${common[@]} ${gmqcc[@]}
+TESTSUITE_OBJ := ${common[@]} ${testsuite[@]}
+PAK_OBJ       := ${common[@]} ${pak[@]}
+
+EOF
+  printf 'ALL_PROGRAMS ='
+  for i in "${executables[@]}"; do
+    printf ' $(%s)' "$i"
+  done
+  echo
+}
+
+# generate the commands used to build objects and executables
+# in a way that works with both BSD make and gmake by not relying
+# on special vars like - also generate the .d files
+print_targets() {
+  # generate object rules to get the right path: $cf_dir
+  for obj in "${all_c_obj[@]}"; do
+    local c_src="${cf_dir}/${obj%.o}.c"
+    local d_inc="${obj}.d"
+    echo "${obj}: ${c_src}"
+    echo $'\t'"\$(CC) \$(CFLAGS) \$(CPPFLAGS) -c -o \$@ \"${c_src}\" -MMD -MF \"${d_inc}\" -MT \$@"
+  done
+
+  for exe in "${executables[@]}"; do
+    echo "\$(${exe}): \$(${exe}_OBJ)"
+    echo $'\t'"\$(CC) \$(LDFLAGS) -o \$(${exe}) \$(${exe}_OBJ) \$(LIBS)"
+  done
+}
+
+#
+# configure script
+#
+
+# TODO: colors
+die() {
+  local mesg="$1"; shift
+  printf "fatal: ${mesg}\n" "$@"
+  exit 1
+}
+
+msg() {
+  local mesg="$1"; shift
+  printf "configure: ${mesg}\n" "$@"
+}
+
+usage() {
+  cat <<EOF
+${progname} [options]
+options:
+  Target directories:
+    --prefix=PREFIX      change the install prefix [/usr/local]
+    --bindir=BINDIR      target of executables [PREFIX/bin]
+    --datadir=DATADIR    target of additional data [PREFIX/share]
+    --mandir=MANDIR      target of manpages [DATADIR/man]
+    --man1dir=MAN1DIR    manual section 1 [MANDIR/man1]
+  Environment variables:
+    CC, CFLAGS, CPPFLAGS
+EOF
+  exit 1
+}
+
+parse_cmdline() {
+  while [ $# -ge 1 ]; do
+    case "$1" in
+      --prefix=*)  cf_prefix="${1#--prefix=}" ;;
+      --bindir=*)  cf_bindir="${1#--bindir=}" ;;
+      --datadir=*) cf_datadir="${1#--datadir=}" ;;
+      --mandir=*)  cf_mandir="${1#--mandir=}"   ;;
+      --man1dir=*) cf_man1dir="${1#--man1dir=}" ;;
+      -h|--help) usage ;;
+      *)
+        echo "Unknown parameter: $1"
+        usage
+        ;;
+    esac
+    shift
+  done
+}
+
+#
+# Some library functions
+#
+need_cmd() {
+  if which $1 >/dev/null 2>&1
+  then msg "found $1"
+  else die "need $1"
+  fi
+}
+
+# so we don't have to repeat the >/dev/null all the time
+# also TODO:
+#    strip parameters (ie, 'need_cmd $CC' with CC="gcc -m32" should work)
+has_cmd() {
+  which $1 >/dev/null
+}
+
+#
+# Check environment
+# Well we can expect those to exist, no?
+#
+need_cmd uname
+need_cmd tr
+
+#
+# Let's figure out where we are...
+#
+
+need_cmd readlink
+cf_wd="${PWD}"
+cf_dir="$(readlink -f "${progname}")"
+# or should we use the hopefully more reliable basename command?
+cf_dir="${cf_dir%/*}"
+
+if [[ $cf_dir == $cf_wd ]]; then
+  echo "Please run this script in a different directory \
+to not overwrite the git working tree."
+  exit 1
+fi
+
+# execute a command inside $cf_dir
+indir() {
+  # do it in a subshell so we don't change directory ourselves
+  ( cd "${cf_dir}" && "$@" ) || false
+}
+
+#
+# Find a compiler...
+#
+CC=${CC:-clang}
+has_cmd "${CC}" || CC=clang
+has_cmd "${CC}" || CC=gcc
+has_cmd "${CC}" || CC=cc
+has_cmd "${CC}" || CC=tcc
+has_cmd "${CC}" || die "No compiler found"
+
+# We might add support for different compilers with a different CLI
+cf_cctype="gcc"
+
+if [[ $CC != clang && $CC != gcc && $CC != g++ ]]; then
+  cf_ccver="$(${CC} -v 2>&1)"
+  (( $? )) && die "Failed to retrieve compiler version info"
+  if (echo "${cf_ccver}" | grep -q '\<clang\|gcc\>'); then
+    msg "found compatible compiler"
+  else
+    die "don't know how to use this compiler..."
+  fi
+fi
+
+# Git information - that is, if git is available
+cf_gitinfo=0
+if has_cmd git; then
+  # And provided we're in a git repo:
+  if [[ -d "${cf_dir}/.git" ]]; then
+    cf_gitinfo=1
+    msg "reading git info"
+    cf_gitinfo_text="$(indir git describe --always)"
+  fi
+fi
+
+# valgrind?
+cf_valgrind=0
+has_cmd valgrind && cf_valgrind=1
+
+#
+# default host specific values:
+#
+host="$(uname -s | tr A-Z a-z)"
+case "${host}" in
+  linux|*bsd*)
+    cf_prefix="${cf_prefix:-/usr/local}"
+    cf_bindir="${cf_bindir:-${cf_prefix}/bin}"
+    cf_datadir="${cf_datadir:-${cf_prefix}/share}"
+    cf_mandir="${cf_mandir:-${cf_datadir}/man}"
+    cf_man1dir="${cf_man1dir:-${cf_mandir}/man1}"
+    cf_exesuffix=""
+    ;;
+  *)
+    cf_prefix="${cf_prefix:-}"
+    cf_bindir="${cf_bindir:-}"
+    cf_datadir="${cf_datadir:-}"
+    cf_mandir="${cf_mandir:-}"
+    cf_man1dir="${cf_man1dir:-}"
+    cf_exesuffix=".exe"
+    ;;
+esac
+
+# for the default-supported compilers:
+cf_cflags_gcc=(-Wall -Wextra -Werror -Wstrict-aliasing -Wno-attributes)
+cf_ldflags_gcc=()
+cf_libs_gcc=(-lm)
+
+# compiler specific flags:
+[[ $CC != g++ ]] && cf_cflags_gcc+=(-Wmissing-prototypes -Wstrict-prototypes)
+[[ $CC = clang ]] && \
+  cf_cflags_gcc+=(
+    -Weverything
+    -Wno-padded
+    -Wno-format-nonliteral
+    -Wno-disabled-macro-expansion
+    -Wno-conversion
+    -Wno-float-equal
+    -Wno-unknown-warning-option
+    -Wno-cast-align)
+
+if [[ $CC != tcc ]]; then
+  cf_cflags_gcc+=(-pedantic-errors)
+else
+  cf_cflags_gcc+=(-Wno-pointer-sign -fno-common)
+fi
+
+parse_cmdline
+
+if (( cf_gitinfo )); then
+  cf_cflags_gcc+=(-DGMQCC_GITINFO="\"${cf_gitinfo_text}\"")
+fi
+
+if (( ! cf_valgrind )); then
+  cf_cflags_gcc+=(-DNVALGRIND)
+fi
+
+#
+# Put the cflags/ldflags/libs we use into cf_cflags/ldflags/libs
+#
+case "${cf_cctype}" in
+  gcc|clang)
+    cf_cflags=("${cf_cflags_gcc[@]}")
+    cf_ldflags=("${cf_ldflags_gcc[@]}")
+    cf_libs=("${cf_libs_gcc[@]}")
+    ;;
+  *)
+    die "compiler type '%s' not handled here!" "${cf_cctype}"
+esac
+
+#
+# Now generate our output file
+#
+echo "Generating Makefile"
+( cd "${cf_dir}"
+
+  # First: cflags and directories
+
+  cat <<EOF
+CC      = ${CC}
+
+CFLAGS  = ${CFLAGS}  ${cf_cflags[@]}
+LDFLAGS = ${LDFLAGS} ${cf_ldflags[@]}
+LIBS    = ${LIBS}    ${cf_libs[@]}
+
+SRCDIR = "${cf_dir}"
+CFGDIR = "${cf_wd}"
+
+PREFIX  = ${cf_prefix}
+BINDIR  = ${cf_bindir}
+DATADIR = ${cf_datadir}
+MANDIR  = ${cf_mandir}
+MAN1DIR = ${cf_man1dir}
+EOF
+  echo
+
+  # now all object variables
+  print_objects
+  echo
+
+  # the all rule to include all executables
+  print_all_rule
+
+  # Now the Makefile.in
+  echo "# Makefile.in contents:"
+  echo
+  cat Makefile.in
+  echo
+
+  # all the targets and how to build them
+  print_targets
+
+  # include dependency files too
+  echo "-include *.o.d"
+) > "${cf_wd}/Makefile"

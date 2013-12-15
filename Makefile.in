@@ -1,0 +1,38 @@
+.PHONY: test check
+
+test: check
+check: all
+	cd $(SRCDIR) && $(CFGDIR)/$(TESTSUITE)
+
+strip: $(GMQCC) $(QCVM) $(TESTSUITE)
+	strip $(GMQCC)
+	strip $(QCVM)
+	strip $(TESTSUITE)
+
+clean:
+	rm -rf *.o *.o.d $(ALL_PROGRAMS) *.dat gource.mp4 *.exe gm-qcc.tgz ./cov-int
+
+coverity:
+	@cov-build --dir cov-int $(MAKE)
+	@tar czf gm-qcc.tgz cov-int
+	@rm -rf cov-int
+	@echo gm-qcc.tgz generated, submit for analysis
+
+#install rules
+install: install-gmqcc install-qcvm install-gmqpak install-doc
+install-gmqcc: $(GMQCC)
+	install -d -m755               $(DESTDIR)$(BINDIR)
+	install    -m755  $(GMQCC)     $(DESTDIR)$(BINDIR)/$(GMQCC)
+install-qcvm: $(QCVM)
+	install -d -m755               $(DESTDIR)$(BINDIR)
+	install    -m755  $(QCVM)      $(DESTDIR)$(BINDIR)/$(QCVM)
+install-gmqpak: $(PAK)
+	install -d -m755               $(DESTDIR)$(BINDIR)
+	install    -m755  $(PAK)       $(DESTDIR)$(BINDIR)/$(PAK)
+install-doc:
+	install -d -m755               $(DESTDIR)$(MANDIR)/man1
+	install    -m644  doc/gmqcc.1  $(DESTDIR)$(MANDIR)/man1/
+	install    -m644  doc/qcvm.1   $(DESTDIR)$(MANDIR)/man1/
+	install    -m644  doc/gmqpak.1 $(DESTDIR)$(MANDIR)/man1/
+
+# Targets follow here
