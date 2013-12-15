@@ -260,12 +260,17 @@ print_targets() {
     local c_src="${cf_dir}/${obj%.o}.c"
     local d_inc="${obj}.d"
     echo "${obj}: ${c_src}"
-    echo $'\t'"\$(CC) \$(CFLAGS) \$(CPPFLAGS) -c -o \$@ \"${c_src}\" -MMD -MF \"${d_inc}\" -MT \$@"
+    printf '\t$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ "%s"' "${c_src}"
+    if [[ $cf_cctype == gcc ]]; then
+      printf ' -MMD -MF "%s" -MT $@\n' "${d_inc}"
+    else
+      echo
+    fi
   done
 
   for exe in "${executables[@]}"; do
     echo "\$(${exe}): \$(${exe}_OBJ)"
-    echo $'\t'"\$(CC) \$(LDFLAGS) -o \$(${exe}) \$(${exe}_OBJ) \$(LIBS)"
+    printf '\t$(CC) $(LDFLAGS) -o $(%s) $(%s_OBJ) $(LIBS)\n' "${exe}" "${exe}"
   done
 }
 
