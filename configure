@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/bin/sh
 # vim: ts=2 sts=2 sw=2 et:
 
 progname="$0"
@@ -98,9 +98,19 @@ case "${host}" in
 esac
 
 # for the default-supported compilers:
-cf_cflags_gcc=(-Wall -Wextra -Werror -Wstrict-aliasing -Wno-attributes)
-cf_ldflags_gcc=()
-cf_libs_gcc=(-lm)
+cf_cflags_gcc="-Wall -Wextra -Werror -Wstrict-aliasing -Wno-attributes"
+cf_ldflags_gcc=""
+cf_libs_gcc="-lm"
+
+cflags_gcc() {
+  cf_cflags_gcc="${cf_cflags_gcc} $@"
+}
+ldflags_gcc() {
+  cf_ldflags_gcc="${cf_ldflags_gcc} $@"
+}
+libs_gcc() {
+  cf_libs_gcc="${cf_libs_gcc} $@"
+}
 
 # Let's figure out where we are...
 cf_wd="${PWD}"
@@ -108,7 +118,7 @@ cf_dir="$(readlink -f "${progname}")"
 # or should we use the hopefully more reliable basename command?
 cf_dir="${cf_dir%/*}"
 
-if [[ $cf_dir == $cf_wd ]]; then
+if [ "x${cf_dir}" = "x${cf_wd}" ]; then
   echo "Please run this script in a different directory \
 to not overwrite the git working tree."
   exit 1
@@ -133,9 +143,9 @@ has_cmd "${CC}" || die "No compiler found"
 # We might add support for different compilers with a different CLI
 cf_cctype="gcc"
 
-if [[ $CC != clang && $CC != gcc && $CC != g++ ]]; then
+if [ "x${CC}" != "xclang" -a "x${CC}" != "gcc" -a "x${CC}" != "g++" ]; then
   cf_ccver="$(${CC} -v 2>&1)"
-  (( $? )) && die "Failed to retrieve compiler version info"
+  [ $? -eq 0 ] || die "Failed to retrieve compiler version info"
   if (echo "${cf_ccver}" | grep -q '\<clang\|gcc\>'); then
     msg "found compatible compiler"
   else
@@ -147,7 +157,7 @@ fi
 cf_gitinfo=0
 if has_cmd git; then
   # And provided we're in a git repo:
-  if [[ -d "${cf_dir}/.git" ]]; then
+  if [ -d "${cf_dir}/.git" ]; then
     cf_gitinfo=1
     msg "reading git info"
     cf_gitinfo_text="$(indir git describe --always)"
@@ -159,32 +169,34 @@ cf_valgrind=0
 has_cmd valgrind && cf_valgrind=1
 
 # compiler specific flags:
-[[ $CC != g++ ]] && cf_cflags_gcc+=(-Wmissing-prototypes -Wstrict-prototypes)
-[[ $CC = clang ]] && \
-  cf_cflags_gcc+=(
-    -Weverything
-    -Wno-padded
-    -Wno-format-nonliteral
-    -Wno-disabled-macro-expansion
-    -Wno-conversion
-    -Wno-float-equal
-    -Wno-unknown-warning-option
-    -Wno-cast-align)
+[ "x${CC}" != "xg++" ] && \
+  cflags_gcc -Wmissing-prototypes -Wstrict-prototypes
 
-if [[ $CC != tcc ]]; then
-  cf_cflags_gcc+=(-pedantic-errors)
+if [ "x${CC}" = "xclang" ]; then
+  cflags_gcc -Weverything
+  cflags_gcc -Wno-padded
+  cflags_gcc -Wno-format-nonliteral
+  cflags_gcc -Wno-disabled-macro-expansion
+  cflags_gcc -Wno-conversion
+  cflags_gcc -Wno-float-equal
+  cflags_gcc -Wno-unknown-warning-option
+  cflags_gcc -Wno-cast-align
+fi
+
+if [ "x${CC}" != "xtcc" ]; then
+  cflags_gcc -pedantic-errors
 else
-  cf_cflags_gcc+=(-Wno-pointer-sign -fno-common)
+  cflags_gcc -Wno-pointer-sign -fno-common
 fi
 
 parse_cmdline
 
-if (( cf_gitinfo )); then
-  cf_cflags_gcc+=(-DGMQCC_GITINFO="\"${cf_gitinfo_text}\"")
+if [ ${cf_gitinfo} -ne 0 ]; then
+  cflags_gcc '-DGMQCC_GITINFO="${cf_gitinfo_text}"'
 fi
 
-if (( ! cf_valgrind )); then
-  cf_cflags_gcc+=(-DNVALGRIND)
+if [ ${cf_valgrind} -eq 0 ]; then
+  cflags_gcc -DNVALGRIND
 fi
 
 #
@@ -192,9 +204,9 @@ fi
 #
 case "${cf_cctype}" in
   gcc|clang)
-    cf_cflags=("${cf_cflags_gcc[@]}")
-    cf_ldflags=("${cf_ldflags_gcc[@]}")
-    cf_libs=("${cf_libs_gcc[@]}")
+    cf_cflags="${cf_cflags_gcc}"
+    cf_ldflags="${cf_ldflags_gcc}"
+    cf_libs="${cf_libs_gcc}"
     ;;
   *)
     die "compiler type '%s' not handled here!" "${cf_cctype}"
@@ -207,46 +219,53 @@ esac
 # executables is an array of variable names used in the makefile to
 # name an executable; the list of objects is assumed to be
 # in ${var}_OBJ
-executables=(GMQCC QCVM TESTSUITE PAK)
-all_c_obj=() # filled by print_objects
+executables="GMQCC QCVM TESTSUITE PAK"
+all_c_obj=""
+add_c_obj() {
+  all_c_obj="${all_c_obj} $@"
+}
+
 print_all_rule() {
   printf 'all:'
-  for i in "${executables[@]}"; do
-    printf ' $(%s)' "$i"
+  for i in ${executables}; do
+    printf ' $(%s)' "${i}"
   done
   echo
 }
 
 # create all the object variables:
 print_objects() {
-  local common=(ansi.o util.o hash.o stat.o fs.o opts.o conout.o)
-    all_c_obj+=("${common[@]}")
-  local gmqcc=(main.o utf8.o
-               lexer.o parser.o ftepp.o
-               fold.o intrin.o correct.o
-               ast.o ir.o code.o)
-    all_c_obj+=("${gmqcc[@]}")
-  local qcvm=(exec.o)
-    all_c_obj+=("${qcvm[@]}")
-  local testsuite=(test.o)
-    all_c_obj+=("${testsuite[@]}")
-  local pak=(pak.o)
-    all_c_obj+=("${pak[@]}")
+  common="ansi.o util.o hash.o stat.o fs.o opts.o conout.o"
+  add_c_obj ${common}
+
+  gmqcc="main.o utf8.o lexer.o parser.o ftepp.o fold.o"
+  gmqcc="${gmqcc} intrin.o correct.o ast.o ir.o code.o"
+  add_c_obj ${gmqcc}
+
+  qcvm=exec.o
+  add_c_obj ${qcvm}
+
+  testsuite=test.o
+  add_c_obj ${testsuite}
+
+  pak=pak.o
+  add_c_obj ${pak}
+
   cat <<EOF
 GMQCC     = gmqcc${cf_exesuffix}
 QCVM      = qcvm${cf_exesuffix}
 TESTSUITE = testsuite${cf_exesuffix}
 PAK       = pak${cf_exesuffix}
 
-QCVM_OBJ      := ${common[@]} ${qcvm[@]}
-GMQCC_OBJ     := ${common[@]} ${gmqcc[@]}
-TESTSUITE_OBJ := ${common[@]} ${testsuite[@]}
-PAK_OBJ       := ${common[@]} ${pak[@]}
+QCVM_OBJ      := ${common} ${qcvm}
+GMQCC_OBJ     := ${common} ${gmqcc}
+TESTSUITE_OBJ := ${common} ${testsuite}
+PAK_OBJ       := ${common} ${pak}
 
 EOF
   printf 'ALL_PROGRAMS ='
-  for i in "${executables[@]}"; do
-    printf ' $(%s)' "$i"
+  for i in ${executables}; do
+    printf ' $(%s)' "${i}"
   done
   echo
 }
@@ -256,19 +275,19 @@ EOF
 # on special vars like - also generate the .d files
 print_targets() {
   # generate object rules to get the right path: $cf_dir
-  for obj in "${all_c_obj[@]}"; do
+  for obj in ${all_c_obj}; do
     local c_src="${cf_dir}/${obj%.o}.c"
     local d_inc="${obj}.d"
     echo "${obj}: ${c_src}"
     printf '\t$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ "%s"' "${c_src}"
-    if [[ $cf_cctype == gcc ]]; then
+    if [ "x$cf_cctype" == "xgcc" ]; then
       printf ' -MMD -MF "%s" -MT $@\n' "${d_inc}"
     else
       echo
     fi
   done
 
-  for exe in "${executables[@]}"; do
+  for exe in ${executables}; do
     echo "\$(${exe}): \$(${exe}_OBJ)"
     printf '\t$(CC) $(LDFLAGS) -o $(%s) $(%s_OBJ) $(LIBS)\n' "${exe}" "${exe}"
   done
@@ -285,9 +304,9 @@ echo "Generating Makefile"
   cat <<EOF
 CC      = ${CC}
 
-CFLAGS  = ${CFLAGS}  ${cf_cflags[@]}
-LDFLAGS = ${LDFLAGS} ${cf_ldflags[@]}
-LIBS    = ${LIBS}    ${cf_libs[@]}
+CFLAGS  = ${CFLAGS}  ${cf_cflags}
+LDFLAGS = ${LDFLAGS} ${cf_ldflags}
+LIBS    = ${LIBS}    ${cf_libs}
 
 SRCDIR = "${cf_dir}"
 CFGDIR = "${cf_wd}"
