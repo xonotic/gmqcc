@@ -162,8 +162,10 @@ msg 'using CC = %s' "${CC}"
 
 # We might add support for different compilers with a different CLI
 cf_cctype="gcc"
+cf_dynamic_depends=1
 
 if [ "x${CC}" != "xclang" -a "x${CC}" != "gcc" -a "x${CC}" != "g++" ]; then
+  cf_dynamic_depends=0
   msg "checking compiler type"
   cf_ccver="$(${CC} -v 2>&1)"
   [ $? -eq 0 ] || die "Failed to retrieve compiler version info"
@@ -340,7 +342,6 @@ print_targets() {
     echo "${obj}: ${c_src}"
     printf '\t$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ "%s"' "${c_src}"
     if [ "x$cf_cctype" == "xgcc" ]; then
-      cf_dynamic_depends=1
       printf ' -MMD -MF "%s" -MT $@\n' "${d_inc}"
     else
       echo
