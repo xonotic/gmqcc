@@ -51,6 +51,7 @@ typedef struct ast_member_s      ast_member;
 typedef struct ast_array_index_s ast_array_index;
 typedef struct ast_breakcont_s   ast_breakcont;
 typedef struct ast_switch_s      ast_switch;
+typedef struct ast_range_s       ast_range;
 typedef struct ast_label_s       ast_label;
 typedef struct ast_goto_s        ast_goto;
 typedef struct ast_argpipe_s     ast_argpipe;
@@ -98,10 +99,11 @@ enum {
     TYPE_ast_member,      /* 15 */
     TYPE_ast_array_index, /* 16 */
     TYPE_ast_breakcont,   /* 17 */
-    TYPE_ast_switch,      /* 18 */
-    TYPE_ast_label,       /* 19 */
-    TYPE_ast_goto,        /* 20 */
-    TYPE_ast_argpipe      /* 21 */
+    TYPE_ast_range,       /* 18 */
+    TYPE_ast_switch,      /* 19 */
+    TYPE_ast_label,       /* 20 */
+    TYPE_ast_goto,        /* 21 */
+    TYPE_ast_argpipe      /* 22 */
 };
 
 #define ast_istype(x, t) ( ((ast_node*)x)->nodetype == (TYPE_##t) )
@@ -536,6 +538,38 @@ struct ast_switch_s
 };
 
 ast_switch* ast_switch_new(lex_ctx_t ctx, ast_expression *op);
+
+/*
+ * Ranges
+ *
+ * Used to implement any/all ranges, which are inclusive only.
+ * This any / all are range specifiers which change the semantics of
+ * how the range expression is dealt with. Because of the nature of ranges
+ * the whole expression it's used in needs to be rewrote. A table of how
+ * the rewrite works is provided below:
+ *
+ *  (a == any b .. c) -> (a >= b && a <= c)
+ *  (a == all b .. c) -> error (makes no sense)
+ *  (a != any b .. c) -> error (makes no sense)
+ *  (a != all b .. c) -> (a < b || a > c)
+ *  (a <= any b .. c) -> (a <= c)
+ *  (a <= all b .. c) -> (a <= b)
+ *  (a >= any b .. c) -> (a >= b)
+ *  (a >= all b .. c) -> (a >= c)
+ *  (a < any b .. c) -> (a < c)
+ *  (a < all b .. c) -> (a < b)
+ *  (a > any b .. c) -> (a > b)
+ *  (a > all b .. c) -> (a > c)
+ *  (a <=> any b .. c) -> error (why would you even try)
+ *  (a <=> all b .. c) -> error (why would you even try)
+ */
+struct ast_range_s {
+    ast_expression expression;
+    ast_expression *lower;
+    ast_expression *upper;
+};
+
+ast_range* ast_range_new(lex_ctx_t ctx, ast_expression *lower, ast_expression *upper);
 
 /* Label nodes
  *

@@ -75,6 +75,8 @@ static void ast_binstore_delete(ast_binstore*);
 static bool ast_binstore_codegen(ast_binstore*, ast_function*, bool lvalue, ir_value**);
 static void ast_binary_delete(ast_binary*);
 static bool ast_binary_codegen(ast_binary*, ast_function*, bool lvalue, ir_value**);
+static void ast_range_delete(ast_range *);
+static bool ast_range_codegen(ast_range*, ast_function*, bool lvalue, ir_value**);
 
 /* It must not be possible to get here. */
 static GMQCC_NORETURN void _ast_node_destroy(ast_node *self)
@@ -913,6 +915,27 @@ void ast_switch_delete(ast_switch *self)
         ast_unref(self->cases[i].code);
     }
     vec_free(self->cases);
+
+    ast_expression_delete((ast_expression*)self);
+    mem_d(self);
+}
+
+ast_range* ast_range_new(lex_ctx_t ctx, ast_expression *lower, ast_expression *upper) {
+    ast_instantiate(ast_range, ctx, ast_range_delete);
+    ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_range_codegen);
+
+    self->lower = lower;
+    self->upper = upper;
+
+    ast_propagate_effects(self, lower);
+    ast_propagate_effects(self, upper);
+
+    return self;
+}
+
+void ast_range_delete(ast_range *self) {
+    ast_unref(self->upper);
+    ast_unref(self->lower);
 
     ast_expression_delete((ast_expression*)self);
     mem_d(self);
@@ -3262,6 +3285,30 @@ bool ast_switch_codegen(ast_switch *self, ast_function *func, bool lvalue, ir_va
     /* Move 'bout' to the end, it's nicer */
     vec_remove(func->ir_func->blocks, bout_id, 1);
     vec_push(func->ir_func->blocks, bout);
+
+    return true;
+}
+
+bool ast_range_codegen(ast_range *self, ast_function *func, bool lvalue, ir_value **out) {
+    ast_expression_codegen *cgen    = NULL;
+    ir_value               *irupper = NULL;
+    ir_value               *irlower = NULL;
+
+    if (lvalue) {
+        compile_error(ast_ctx(self), "range expression is not an l-value");
+        return false;
+    }
+
+    /* generate (lower .. upper) */
+    cgen = self->lower->codegen;
+    if (!(*cgen)((ast_expression*)(self->lower), func, false, &irlower))
+        return false;
+    cgen = self->upper->codegen;
+    if (!(*cgen)((ast_expression*)(self->upper), func, false, &irupper))
+        return false;
+
+    (void)lvalue;
+    (void)out;
 
     return true;
 }
