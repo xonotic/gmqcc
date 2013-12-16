@@ -2,6 +2,7 @@
 # vim: ts=2 sts=2 sw=2 et:
 
 progname="$0"
+cf_log="config.log"
 
 usage() {
   cat <<EOF
@@ -14,7 +15,7 @@ options:
     --mandir=MANDIR      target of manpages [DATADIR/man]
     --man1dir=MAN1DIR    manual section 1 [MANDIR/man1]
   Environment variables:
-    CC, CFLAGS, CPPFLAGS
+    CC, CPP, CFLAGS, CPPFLAGS
 EOF
   exit 1
 }
@@ -40,13 +41,25 @@ parse_cmdline() {
 # TODO: colors
 die() {
   local mesg="$1"; shift
+  printf "fatal: ${mesg}\n" "$@" >> "${cf_log}"
   printf "fatal: ${mesg}\n" "$@"
   exit 1
 }
 
 msg() {
   local mesg="$1"; shift
+  printf "configure: ${mesg}\n" "$@" >> "${cf_log}"
   printf "configure: ${mesg}\n" "$@"
+}
+
+logprint() {
+  local mesg="$1"; shift
+  printf "${mesg}\n" "$@" >> "${cf_log}"
+}
+
+log() {
+  echo "$@" >> "${cf_log}"
+  "$@"
 }
 
 #
@@ -63,7 +76,7 @@ need_cmd() {
 # also TODO:
 #    strip parameters (ie, 'need_cmd $CC' with CC="gcc -m32" should work)
 has_cmd() {
-  which $1 >/dev/null
+  which $1 >/dev/null 2>&1
 }
 
 #
@@ -71,6 +84,7 @@ has_cmd() {
 # Well we can expect those to exist, no?
 #
 need_cmd uname
+need_cmd awk
 need_cmd tr
 need_cmd readlink
 
@@ -97,6 +111,9 @@ case "${host}" in
     ;;
 esac
 
+# will be set to one if the compiler can generate .d files
+cf_dynamic_depends=0
+
 # for the default-supported compilers:
 cf_cflags_gcc="-Wall -Wextra -Werror -Wstrict-aliasing -Wno-attributes"
 cf_ldflags_gcc=""
@@ -114,6 +131,7 @@ libs_gcc() {
 
 # Let's figure out where we are...
 cf_wd="${PWD}"
+cf_log="${cf_wd}/config.log"
 cf_dir="$(readlink -f "${progname}")"
 # or should we use the hopefully more reliable basename command?
 cf_dir="${cf_dir%/*}"
@@ -133,17 +151,20 @@ indir() {
 #
 # Find a compiler...
 #
+msg "looking for C compiler..."
 CC=${CC:-clang}
 has_cmd "${CC}" || CC=clang
 has_cmd "${CC}" || CC=gcc
 has_cmd "${CC}" || CC=cc
 has_cmd "${CC}" || CC=tcc
-has_cmd "${CC}" || die "No compiler found"
+has_cmd "${CC}" || die "no compiler found"
+msg 'using CC = %s' "${CC}"
 
 # We might add support for different compilers with a different CLI
 cf_cctype="gcc"
 
 if [ "x${CC}" != "xclang" -a "x${CC}" != "gcc" -a "x${CC}" != "g++" ]; then
+  msg "checking compiler type"
   cf_ccver="$(${CC} -v 2>&1)"
   [ $? -eq 0 ] || die "Failed to retrieve compiler version info"
   if (echo "${cf_ccver}" | grep -q '\<clang\|gcc\>'); then
@@ -151,6 +172,26 @@ if [ "x${CC}" != "xclang" -a "x${CC}" != "gcc" -a "x${CC}" != "g++" ]; then
   else
     die "don't know how to use this compiler..."
   fi
+fi
+
+# Find a preprocessor too
+msg "looking for a C preprocessor..."
+CPP=${CPP:-clang-cpp}
+has_cmd "${CPP}" || CPP=cpp
+if ! has_cmd "${CPP}"; then
+  msg "no C preprocessor found, trying -E"
+  logprint 'executing the following program with %s' "$CC -E"
+  prog="#define SHOW(X) :X:\nSHOW(THIS WORKS)\n"
+  logprint '%s' "${prog}"
+  if echo "${prog}" | $CC -E - 2>&1 \
+     | awk '/^:THIS WORKS:$/{ exit(0); } END {exit(1);}'; then
+    msg 'using preprocessor: %s' "$CC -E"
+    CPP="${CC} -E"
+  else
+    fatal "cannot find a working C preprocessor"
+  fi
+else
+  msg 'using CPP = %s' "${CPP}"
 fi
 
 # Git information - that is, if git is available
@@ -211,6 +252,24 @@ case "${cf_cctype}" in
   *)
     die "compiler type '%s' not handled here!" "${cf_cctype}"
 esac
+
+#
+# Dependency generation
+#
+depgrep() {
+  (echo "${cf_dir}"; $CPP "$@") | awk \
+  'BEGIN {
+    getline cf_dir;
+    cf_len=length(cf_dir);
+  }
+  /^#/{
+    gsub("\"","",$3);
+    if (substr($3,1,cf_len) == cf_dir)
+      print $3;
+  }' \
+    | sort \
+    | uniq
+}
 
 #
 # Makefile generation routines
@@ -281,6 +340,7 @@ print_targets() {
     echo "${obj}: ${c_src}"
     printf '\t$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ "%s"' "${c_src}"
     if [ "x$cf_cctype" == "xgcc" ]; then
+      cf_dynamic_depends=1
       printf ' -MMD -MF "%s" -MT $@\n' "${d_inc}"
     else
       echo
@@ -336,5 +396,17 @@ EOF
   print_targets
 
   # include dependency files too
-  echo "-include *.o.d"
+  echo
+  echo '# Dependency rules'
+  if [ ${cf_dynamic_depends} -ne 0 ]; then
+    echo "-include *.o.d"
+  else
+    for obj in ${all_c_obj}; do
+      src="${obj%.o}.c"
+      logprint 'generating dependencies for: %s' "${src}"
+      deps=$(depgrep "${cf_dir}/${src}" | tr "\n" " ")
+      logprint 'found: %s' "${deps}"
+      printf '%s: %s\n' "${obj}" "${cf_dir}/${src} ${deps}"
+    done
+  fi
 ) > "${cf_wd}/Makefile"
