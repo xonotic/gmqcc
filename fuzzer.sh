@@ -198,7 +198,7 @@ while :; do
 			;;
 	esac
 	newvars
-	build_random_expression 2 "$type"
+	build_random_expression 1 "$type"
 	cat <<EOF >foo.qc
 void print(...) = #1;
 string ftos(float) = #2;
@@ -212,19 +212,18 @@ var vector v = '-134217728 17 0.03125';
 $vars;
 void check_float(string var_name, string expr_short, string expr_long, float a, float b) {
 	print(var_name, " = ", expr_short, "  // ", ftos(a), "\n");
-	if (a == b) {
-		print("GOOD\n");
-	} else {
+	if (a != b)
 		print(var_name, " != ", expr_long, "  // ", ftos(b), "\nFAIL\n");
-	}
 }
 void check_vector(string var_name, string expr_short, string expr_long, vector a, vector b) {
 	print(var_name, " = ", expr_short, "  // ", vtos(a), "\n");
-	if (a == b) {
-		print("GOOD\n");
-	} else {
+	if (a != b)
 		print(var_name, " != ", expr_long, "  // ", vtos(b), "\nFAIL\n");
-	}
+}
+void check_string(string var_name, string expr_short, string expr_long, string a, string b) {
+	print(var_name, " = ", expr_short, "  // ", a, "\n");
+	if (a != b)
+		print(var_name, " != ", expr_long, "  // ", b, "\nFAIL\n");
 }
 #define CHECK(type,var,expr_short,expr_long) \\
 	var = (expr_short); \\
