@@ -75,7 +75,7 @@ build_constant() {
 	esac
 	nextvar
 	compiletime=$randomselect_choice
-	runtime="$var=$randomselect_choice"
+	runtime="CHECK($1, $var, $randomselect_choice, $randomselect_choice)"
 	vars="$1 $var"
 }
 
@@ -166,21 +166,21 @@ build_random_expression() {
 			nextvar
 			case "$op" in
 				'/'|'%')
-					check="if(!${expr2_vars##* }) { print(\"DIVISION BY ZERO\\n\"); return 1; }$NL$TAB"
+					check="if(!${expr2_vars##* }) { print(\"DIVISION BY ZERO\\n\"); return; }$NL$TAB"
 					;;
 				*)
 					check=
 					;;
 			esac
 			compiletime="($expr1_compiletime)$op($expr2_compiletime)"
-			runtime="$expr1_runtime;$NL$TAB$expr2_runtime;$NL$TAB$check$var=(${expr1_vars##* }$op${expr2_vars##* })"
+			runtime="$expr1_runtime;$NL$TAB$expr2_runtime;$NL$TAB$check""CHECK($type, $var, ${expr1_vars##* }$op${expr2_vars##* }, $compiletime)"
 			vars="$expr1_vars;$NL$expr2_vars;$NL$type $var"
 			;;
 		*)
 			build_random_expression "$((depth - 1))" "$randomselect_choice"
 			nextvar
 			compiletime="$op($compiletime)"
-			runtime="$runtime;$NL$TAB$var=($op${vars##* })"
+			runtime="$runtime;$NL$TAB""CHECK($type, $var, $op${vars##* }, $op($compiletime))"
 			vars="$vars;$NL$type $var"
 			;;
 	esac
@@ -210,22 +210,30 @@ var string s = "s";
 var float f = 134217728;
 var vector v = '-134217728 17 0.03125';
 $vars;
-float check() {
-	$runtime;
-	$type result = ($compiletime);
-	print("Runtime: ", $conv(${vars##* }), "\\n");
-	print("Compile-time: ", $conv(result), "\\n");
-	return ${vars##* } == result;
-}
-void main() {
-	if (check()) {
-		print("OK\\n");
+void check_float(string var_name, string expr_short, string expr_long, float a, float b) {
+	print(var_name, " = ", expr_short, "  // ", ftos(a), "\n");
+	if (a == b) {
+		print("GOOD\n");
 	} else {
-		print("FAIL\\n");
+		print(var_name, " != ", expr_long, "  // ", ftos(b), "\nFAIL\n");
 	}
 }
+void check_vector(string var_name, string expr_short, string expr_long, vector a, vector b) {
+	print(var_name, " = ", expr_short, "  // ", vtos(a), "\n");
+	if (a == b) {
+		print("GOOD\n");
+	} else {
+		print(var_name, " != ", expr_long, "  // ", vtos(b), "\nFAIL\n");
+	}
+}
+#define CHECK(type,var,expr_short,expr_long) \\
+	var = (expr_short); \\
+	check_##type(#var, #expr_short, #expr_long, var, expr_long)
+void main() {
+	$runtime;
+}
 EOF
-	if ./gmqcc -std=gmqcc -Wall foo.qc; then
+	if ./gmqcc -std=gmqcc -fftepp -Wall foo.qc; then
 		if ./qcvm progs.dat | tee /dev/stderr | grep FAIL >/dev/null; then
 			nl foo.qc
 			echo "Compiler is broken AGAIN."
