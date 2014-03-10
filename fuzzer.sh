@@ -115,8 +115,8 @@ build_random_expression() {
 		randomselect "vector / vector float"
 		#randomselect "float % float float"
 		randomselect "vector >< vector vector"
-		randomselect "float >> float float"
-		randomselect "float << float float"
+		#randomselect "float >> float float"
+		#randomselect "float << float float"
 		randomselect "float < float float"
 		randomselect "float > float float"
 		randomselect "float <=> float float"
@@ -180,7 +180,7 @@ build_random_expression() {
 			build_random_expression "$((depth - 1))" "$randomselect_choice"
 			nextvar
 			compiletime="$op($compiletime)"
-			runtime="$runtime;$NL$TAB""CHECK($type, $var, $op${vars##* }, $op($compiletime))"
+			runtime="$runtime;$NL$TAB""CHECK($type, $var, $op${vars##* }, $compiletime)"
 			vars="$vars;$NL$type $var"
 			;;
 	esac
@@ -198,7 +198,7 @@ while :; do
 			;;
 	esac
 	newvars
-	build_random_expression 1 "$type"
+	build_random_expression 3 "$type"
 	cat <<EOF >foo.qc
 void print(...) = #1;
 string ftos(float) = #2;
