@@ -4,7 +4,7 @@ UNAME  ?= $(shell uname)
 CYGWIN  = $(findstring CYGWIN,  $(UNAME))
 MINGW   = $(findstring MINGW32, $(UNAME))
 
-CFLAGS += -Wall -Wextra -Werror -Wstrict-aliasing
+CFLAGS += -Wall -Wextra -Werror -Wstrict-aliasing -Wno-attributes
 #turn on tons of warnings if clang is present
 # but also turn off the STUPID ONES
 ifeq ($(CC), clang)
@@ -143,6 +143,7 @@ install-doc:
 
 ansi.o: platform.h gmqcc.h opts.def
 util.o: gmqcc.h opts.def platform.h
+hash.o: gmqcc.h opts.def
 stat.o: gmqcc.h opts.def
 fs.o: gmqcc.h opts.def platform.h
 opts.o: gmqcc.h opts.def

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012, 2013
+ * Copyright (C) 2012, 2013, 2014
  *     Wolfgang Bumiller
  *     Dale Weiler
  *
@@ -113,8 +113,10 @@ static void ast_expression_init(ast_expression *self,
     self->outr     = NULL;
     self->params   = NULL;
     self->count    = 0;
-    self->flags    = 0;
     self->varparam = NULL;
+    self->flags    = 0;
+    if (OPTS_OPTION_BOOL(OPTION_COVERAGE))
+        self->flags |= AST_FLAG_BLOCK_COVERAGE;
 }
 
 static void ast_expression_delete(ast_expression *self)
@@ -440,6 +442,24 @@ ast_binary* ast_binary_new(lex_ctx_t ctx, int op,
 {
     ast_instantiate(ast_binary, ctx, ast_binary_delete);
     ast_expression_init((ast_expression*)self, (ast_expression_codegen*)&ast_binary_codegen);
+
+    if (ast_istype(right, ast_unary) && OPTS_OPTIMIZATION(OPTIM_PEEPHOLE)) {
+        ast_unary      *unary  = ((ast_unary*)right);
+        ast_expression *normal = unary->operand;
+
+        /* make a-(-b) => a + b */
+        if (unary->op == VINSTR_NEG_F || unary->op == VINSTR_NEG_V) {
+            if (op == INSTR_SUB_F) {
+                op = INSTR_ADD_F;
+                right = normal;
+                ++opts_optimizationcount[OPTIM_PEEPHOLE];
+            } else if (op == INSTR_SUB_V) {
+                op = INSTR_ADD_V;
+                right = normal;
+                ++opts_optimizationcount[OPTIM_PEEPHOLE];
+            }
+        }
+    }
 
     self->op = op;
     self->left = left;
@@ -1178,7 +1198,6 @@ ast_function* ast_function_new(lex_ctx_t ctx, const char *name, ast_value *vtype
         compile_error(ast_ctx(self), "internal error: ast_function_new condition 0");
         goto cleanup;
     } else if (vtype->hasvalue || vtype->expression.vtype != TYPE_FUNCTION) {
-    } else if (vtype->hasvalue || vtype->expression.vtype != TYPE_FUNCTION) {
         compile_error(ast_ctx(self), "internal error: ast_function_new condition %i %i type=%i (probably 2 bodies?)",
                  (int)!vtype,
                  (int)vtype->hasvalue,
@@ -1207,6 +1226,9 @@ ast_function* ast_function_new(lex_ctx_t ctx, const char *name, ast_value *vtype
     self->fixedparams      = NULL;
     self->return_value     = NULL;
 
+    self->static_names     = NULL;
+    self->static_count     = 0;
+
     return self;
 
 cleanup:
@@ -1228,6 +1250,9 @@ void ast_function_delete(ast_function *self)
          */
         ast_unref(self->vtype);
     }
+    for (i = 0; i < vec_size(self->static_names); ++i)
+        mem_d(self->static_names[i]);
+    vec_free(self->static_names);
     for (i = 0; i < vec_size(self->blocks); ++i)
         ast_delete(self->blocks[i]);
     vec_free(self->blocks);
@@ -1407,6 +1432,8 @@ bool ast_global_codegen(ast_value *self, ir_builder *ir, bool isfield)
             self->ir_v->flags |= IR_FLAG_INCLUDE_DEF;
         if (self->expression.flags & AST_FLAG_ERASEABLE)
             self->ir_v->flags |= IR_FLAG_ERASEABLE;
+        if (self->expression.flags & AST_FLAG_BLOCK_COVERAGE)
+            func->flags |= IR_FLAG_BLOCK_COVERAGE;
         /* The function is filled later on ast_function_codegen... */
         return true;
     }

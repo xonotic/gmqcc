@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012, 2013
+ * Copyright (C) 2012, 2013, 2014
  *     Wolfgang Bumiller
  *     Dale Weiler
  *
@@ -355,6 +355,8 @@ ir_builder* ir_builder_new(const char *modulename)
     }
 
     self->reserved_va_count = NULL;
+    self->coverage_func     = NULL;
+
     self->code              = code_init();
 
     return self;
@@ -602,6 +604,10 @@ ir_block* ir_function_create_block(lex_ctx_t ctx, ir_function *self, const char 
     ir_block* bn = ir_block_new(self, label);
     bn->context = ctx;
     vec_push(self->blocks, bn);
+
+    if ((self->flags & IR_FLAG_BLOCK_COVERAGE) && self->owner->coverage_func)
+        (void)ir_block_create_call(bn, ctx, NULL, self->owner->coverage_func, false);
+
     return bn;
 }
 
@@ -1892,7 +1898,7 @@ ir_value* ir_block_create_unary(ir_block *self, lex_ctx_t ctx,
         case VINSTR_NEG_F:
             return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_F, NULL, operand, ot);
         case VINSTR_NEG_V:
-            return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_V, NULL, operand, ot);
+            return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_V, NULL, operand, TYPE_VECTOR);
 
         default:
             ot = operand->vtype;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012, 2013
+ * Copyright (C) 2012, 2013, 2014
  *     Wolfgang Bumiller
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -22,6 +22,8 @@
  */
 #ifndef GMQCC_LEXER_HDR
 #define GMQCC_LEXER_HDR
+#include "gmqcc.h"
+
 typedef struct token_s token;
 
 struct token_s {
@@ -185,8 +187,7 @@ static const oper_info c_operators[] = {
     { "++",  1, opid3('+','+','P'), ASSOC_RIGHT, 16, OP_PREFIX, false},
     { "--",  1, opid3('-','-','P'), ASSOC_RIGHT, 16, OP_PREFIX, false},
 
-    { "**",  2, opid2('*','*'),     ASSOC_RIGHT, 15, 0,         true},
-
+    { "**",  2, opid2('*','*'),     ASSOC_RIGHT, 14, 0,         true},
     { "!",   1, opid2('!','P'),     ASSOC_RIGHT, 14, OP_PREFIX, true},
     { "~",   1, opid2('~','P'),     ASSOC_RIGHT, 14, OP_PREFIX, true},
     { "+",   1, opid2('+','P'),     ASSOC_RIGHT, 14, OP_PREFIX, false},

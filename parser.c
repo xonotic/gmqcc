@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012, 2013
+ * Copyright (C) 2012, 2013, 2014
  *     Wolfgang Bumiller
  *     Dale Weiler
  *
@@ -476,7 +476,10 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
                                   type_name[exprs[0]->vtype]);
                 return false;
             }
-            out = (ast_expression*)ast_unary_new(ctx, (VINSTR_NEG_F-TYPE_FLOAT) + exprs[0]->vtype, exprs[0]);
+            if (exprs[0]->vtype == TYPE_FLOAT)
+                out = (ast_expression*)ast_unary_new(ctx, VINSTR_NEG_F, exprs[0]);
+            else
+                out = (ast_expression*)ast_unary_new(ctx, VINSTR_NEG_V, exprs[0]);
             break;
 
         case opid2('!','P'):
@@ -684,12 +687,44 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
 
         case opid2('<','<'):
         case opid2('>','>'):
-        case opid3('<','<','='):
-        case opid3('>','>','='):
-            if(!(out = fold_op(parser->fold, op, exprs))) {
-                compile_error(ast_ctx(exprs[0]), "Not Yet Implemented: bit-shifts");
+            if (NotSameType(TYPE_FLOAT)) {
+                compile_error(ctx, "invalid types used in expression: cannot perform shift between types %s and %s",
+                    type_name[exprs[0]->vtype],
+                    type_name[exprs[1]->vtype]);
                 return false;
             }
+
+            if (!(out = fold_op(parser->fold, op, exprs))) {
+                ast_expression *shift = intrin_func(parser->intrin, (op->id == opid2('<','<')) ? "__builtin_lshift" : "__builtin_rshift");
+                ast_call       *call  = ast_call_new(parser_ctx(parser), shift);
+                vec_push(call->params, exprs[0]);
+                vec_push(call->params, exprs[1]);
+                out = (ast_expression*)call;
+            }
+            break;
+
+        case opid3('<','<','='):
+        case opid3('>','>','='):
+            if (NotSameType(TYPE_FLOAT)) {
+                compile_error(ctx, "invalid types used in expression: cannot perform shift operation between types %s and %s",
+                    type_name[exprs[0]->vtype],
+                    type_name[exprs[1]->vtype]);
+                return false;
+            }
+
+            if(!(out = fold_op(parser->fold, op, exprs))) {
+                ast_expression *shift = intrin_func(parser->intrin, (op->id == opid3('<','<','=')) ? "__builtin_lshift" : "__builtin_rshift");
+                ast_call       *call  = ast_call_new(parser_ctx(parser), shift);
+                vec_push(call->params, exprs[0]);
+                vec_push(call->params, exprs[1]);
+                out = (ast_expression*)ast_store_new(
+                    parser_ctx(parser),
+                    INSTR_STORE_F,
+                    exprs[0],
+                    (ast_expression*)call
+                );
+            }
+
             break;
 
         case opid2('|','|'):
@@ -1580,6 +1615,23 @@ static bool parse_sya_operand(parser_t *parser, shunt *sy, bool with_labels)
             if (!strncmp(parser_tokval(parser), "__builtin_", 10)) {
                 var = intrin_func(parser->intrin, parser_tokval(parser));
             }
+
+            /*
+             * Try it again, intrin_func deals with the alias method as well
+             * the first one masks for __builtin though, we emit warning here.
+             */
+            if (!var) {
+                if ((var = intrin_func(parser->intrin, parser_tokval(parser)))) {
+                    (void)!compile_warning(
+                        parser_ctx(parser),
+                        WARN_BUILTINS,
+                        "using implicitly defined builtin `__builtin_%s' for `%s'",
+                        parser_tokval(parser),
+                        parser_tokval(parser)
+                    );
+                }
+            }
+
 
             if (!var) {
                 char *correct = NULL;
@@ -2751,6 +2803,11 @@ static bool parse_break_continue(parser_t *parser, ast_block *block, ast_express
 /* returns true when it was a variable qualifier, false otherwise!
  * on error, cvq is set to CV_WRONG
  */
+typedef struct {
+    const char *name;
+    size_t      flag;
+} attribute_t;
+
 static bool parse_qualifiers(parser_t *parser, bool with_local, int *cvq, bool *noref, bool *is_static, uint32_t *_flags, char **message)
 {
     bool had_const    = false;
@@ -2760,8 +2817,18 @@ static bool parse_qualifiers(parser_t *parser, bool with_local, int *cvq, bool *
     bool had_static   = false;
     uint32_t flags    = 0;
 
-    *cvq = CV_NONE;
+    static attribute_t attributes[] = {
+        { "noreturn",   AST_FLAG_NORETURN   },
+        { "inline",     AST_FLAG_INLINE     },
+        { "eraseable",  AST_FLAG_ERASEABLE  },
+        { "accumulate", AST_FLAG_ACCUMULATE },
+        { "last",       AST_FLAG_FINAL_DECL }
+    };
+
+   *cvq = CV_NONE;
+
     for (;;) {
+        size_t i;
         if (parser->tok == TOKEN_ATTRIBUTE_OPEN) {
             had_attrib = true;
             /* parse an attribute */
@@ -2770,42 +2837,28 @@ static bool parse_qualifiers(parser_t *parser, bool with_local, int *cvq, bool *
                 *cvq = CV_WRONG;
                 return false;
             }
-            if (!strcmp(parser_tokval(parser), "noreturn")) {
-                flags |= AST_FLAG_NORETURN;
-                if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
-                    parseerror(parser, "`noreturn` attribute has no parameters, expected `]]`");
-                    *cvq = CV_WRONG;
-                    return false;
+
+            for (i = 0; i < GMQCC_ARRAY_COUNT(attributes); i++) {
+                if (!strcmp(parser_tokval(parser), attributes[i].name)) {
+                    flags |= attributes[i].flag;
+                    if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
+                        parseerror(parser, "`%s` attribute has no parameters, expected `]]`",
+                            attributes[i].name);
+                        *cvq = CV_WRONG;
+                        return false;
+                    }
+                    break;
                 }
             }
-            else if (!strcmp(parser_tokval(parser), "noref")) {
+
+            if (i != GMQCC_ARRAY_COUNT(attributes))
+                goto leave;
+
+
+            if (!strcmp(parser_tokval(parser), "noref")) {
                 had_noref = true;
                 if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
                     parseerror(parser, "`noref` attribute has no parameters, expected `]]`");
-                    *cvq = CV_WRONG;
-                    return false;
-                }
-            }
-            else if (!strcmp(parser_tokval(parser), "inline")) {
-                flags |= AST_FLAG_INLINE;
-                if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
-                    parseerror(parser, "`inline` attribute has no parameters, expected `]]`");
-                    *cvq = CV_WRONG;
-                    return false;
-                }
-            }
-            else if (!strcmp(parser_tokval(parser), "eraseable")) {
-                flags |= AST_FLAG_ERASEABLE;
-                if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
-                    parseerror(parser, "`eraseable` attribute has no parameters, expected `]]`");
-                    *cvq = CV_WRONG;
-                    return false;
-                }
-            }
-            else if (!strcmp(parser_tokval(parser), "accumulate")) {
-                flags |= AST_FLAG_ACCUMULATE;
-                if (!parser_next(parser) || parser->tok != TOKEN_ATTRIBUTE_CLOSE) {
-                    parseerror(parser, "`accumulate` attribute has no parameters, expected `]]`");
                     *cvq = CV_WRONG;
                     return false;
                 }
@@ -2891,6 +2944,47 @@ static bool parse_qualifiers(parser_t *parser, bool with_local, int *cvq, bool *
                     return false;
                 }
             }
+            else if (!strcmp(parser_tokval(parser), "coverage") && !(flags & AST_FLAG_COVERAGE)) {
+                flags |= AST_FLAG_COVERAGE;
+                if (!parser_next(parser)) {
+                    error_in_coverage:
+                    parseerror(parser, "parse error in coverage attribute");
+                    *cvq = CV_WRONG;
+                    return false;
+                }
+                if (parser->tok == '(') {
+                    if (!parser_next(parser)) {
+                        bad_coverage_arg:
+                        parseerror(parser, "invalid parameter for coverage() attribute\n"
+                                           "valid are: block");
+                        *cvq = CV_WRONG;
+                        return false;
+                    }
+                    if (parser->tok != ')') {
+                        do {
+                            if (parser->tok != TOKEN_IDENT)
+                                goto bad_coverage_arg;
+                            if (!strcmp(parser_tokval(parser), "block"))
+                                flags |= AST_FLAG_BLOCK_COVERAGE;
+                            else if (!strcmp(parser_tokval(parser), "none"))
+                                flags &= ~(AST_FLAG_COVERAGE_MASK);
+                            else
+                                goto bad_coverage_arg;
+                            if (!parser_next(parser))
+                                goto error_in_coverage;
+                            if (parser->tok == ',') {
+                                if (!parser_next(parser))
+                                    goto error_in_coverage;
+                            }
+                        } while (parser->tok != ')');
+                    }
+                    if (parser->tok != ')' || !parser_next(parser))
+                        goto error_in_coverage;
+                } else {
+                    /* without parameter [[coverage]] equals [[coverage(block)]] */
+                    flags |= AST_FLAG_BLOCK_COVERAGE;
+                }
+            }
             else
             {
                 /* Skip tokens until we hit a ]] */
@@ -2919,6 +3013,8 @@ static bool parse_qualifiers(parser_t *parser, bool with_local, int *cvq, bool *
         }
         else
             break;
+
+        leave:
         if (!parser_next(parser))
             goto onerr;
     }
@@ -4311,6 +4407,7 @@ static bool parser_create_array_accessor(parser_t *parser, ast_value *array, con
         parseerror(parser, "failed to create accessor function value");
         return false;
     }
+    fval->expression.flags &= ~(AST_FLAG_COVERAGE_MASK);
 
     func = ast_function_new(ast_ctx(array), funcname, fval);
     if (!func) {
@@ -5108,6 +5205,8 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
         }
 
         var->cvq = qualifier;
+        if (qflags & AST_FLAG_COVERAGE) /* specified in QC, drop our default */
+            var->expression.flags &= ~(AST_FLAG_COVERAGE_MASK);
         var->expression.flags |= qflags;
 
         /*
@@ -5237,6 +5336,12 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                             retval = false;
                             goto cleanup;
                         }
+                        if (old->flags & AST_FLAG_FINAL_DECL) {
+                            parseerror(parser, "cannot redeclare variable `%s`, declared final here: %s:%i",
+                                       var->name, ast_ctx(old).file, ast_ctx(old).line);
+                            retval = false;
+                            goto cleanup;
+                        }
                         proto = (ast_value*)old;
                         if (!ast_istype(old, ast_value)) {
                             parseerror(parser, "internal error: not an ast_value");
@@ -5250,6 +5355,11 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                             goto cleanup;
                         }
                         proto->expression.flags |= var->expression.flags;
+                        /* copy the context for finals,
+                         * so the error can show where it was actually made 'final'
+                         */
+                        if (proto->expression.flags & AST_FLAG_FINAL_DECL)
+                            ast_ctx(old) = ast_ctx(var);
                         ast_delete(var);
                         var = proto;
                     }
@@ -5421,6 +5531,7 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                      */
                     char   *defname = NULL;
                     size_t  prefix_len, ln;
+                    size_t  sn, sn_size;
 
                     ln = strlen(parser->function->name);
                     vec_append(defname, ln, parser->function->name);
@@ -5442,6 +5553,24 @@ static bool parse_variable(parser_t *parser, ast_block *localblock, bool nofield
                     /* now rename the global */
                     ln = strlen(var->name);
                     vec_append(defname, ln, var->name);
+                    /* if a variable of that name already existed, add the
+                     * counter value.
+                     * The counter is incremented either way.
+                     */
+                    sn_size = vec_size(parser->function->static_names);
+                    for (sn = 0; sn != sn_size; ++sn) {
+                        if (strcmp(parser->function->static_names[sn], var->name) == 0)
+                            break;
+                    }
+                    if (sn != sn_size) {
+                        char *num = NULL;
+                        int   len = util_asprintf(&num, "#%u", parser->function->static_count);
+                        vec_append(defname, len, num);
+                        mem_d(num);
+                    }
+                    else
+                        vec_push(parser->function->static_names, util_strdup(var->name));
+                    parser->function->static_count++;
                     ast_value_set_name(var, defname);
 
                     /* push it to the to-be-generated globals */
@@ -5692,17 +5821,18 @@ skipvar:
             if (!cexp)
                 break;
 
-            if (!localblock) {
+            if (!localblock || is_static) {
                 cval = (ast_value*)cexp;
                 if (cval != parser->nil &&
                     (!ast_istype(cval, ast_value) || ((!cval->hasvalue || cval->cvq != CV_CONST) && !cval->isfield))
                    )
                 {
-                    parseerror(parser, "cannot initialize a global constant variable with a non-constant expression");
+                    parseerror(parser, "initializer is non constant");
                 }
                 else
                 {
-                    if (!OPTS_FLAG(INITIALIZED_NONCONSTANTS) &&
+                    if (!is_static &&
+                        !OPTS_FLAG(INITIALIZED_NONCONSTANTS) &&
                         qualifier != CV_VAR)
                     {
                         var->cvq = CV_CONST;
@@ -6115,11 +6245,51 @@ void parser_cleanup(parser_t *parser)
     mem_d(parser);
 }
 
+static bool parser_set_coverage_func(parser_t *parser, ir_builder *ir) {
+    size_t          i;
+    ast_expression *expr;
+    ast_value      *cov;
+    ast_function   *func;
+
+    if (!OPTS_OPTION_BOOL(OPTION_COVERAGE))
+        return true;
+
+    func = NULL;
+    for (i = 0; i != vec_size(parser->functions); ++i) {
+        if (!strcmp(parser->functions[i]->name, "coverage")) {
+            func = parser->functions[i];
+            break;
+        }
+    }
+    if (!func) {
+        if (OPTS_OPTION_BOOL(OPTION_COVERAGE)) {
+            con_out("coverage support requested but no coverage() builtin declared\n");
+            ir_builder_delete(ir);
+            return false;
+        }
+        return true;
+    }
+
+    cov  = func->vtype;
+    expr = (ast_expression*)cov;
+
+    if (expr->vtype != TYPE_FUNCTION || vec_size(expr->params) != 0) {
+        char ty[1024];
+        ast_type_to_string(expr, ty, sizeof(ty));
+        con_out("invalid type for coverage(): %s\n", ty);
+        ir_builder_delete(ir);
+        return false;
+    }
+
+    ir->coverage_func = func->ir_func->value;
+    return true;
+}
+
 bool parser_finish(parser_t *parser, const char *output)
 {
-    size_t i;
-    ir_builder *ir;
-    bool retval = true;
+    size_t          i;
+    ir_builder     *ir;
+    bool            retval = true;
 
     if (compile_errors) {
         con_out("*** there were compile errors\n");
@@ -6199,6 +6369,10 @@ bool parser_finish(parser_t *parser, const char *output)
     }
     /* Now we can generate immediates */
     if (!fold_generate(parser->fold, ir))
+        return false;
+
+    /* before generating any functions we need to set the coverage_func */
+    if (!parser_set_coverage_func(parser, ir))
         return false;
 
     for (i = 0; i < vec_size(parser->globals); ++i) {
