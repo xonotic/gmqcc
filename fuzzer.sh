@@ -92,7 +92,7 @@ build_random_expression() {
 	esac
 	while :; do
 		randomselect_init
-		#randomselect "float ** float float" # BUG: (-1)**(3) is nan vs -1. exec.c lacks pow(), that's why.
+		randomselect "float ** float float"
 		randomselect "float ! float"
 		randomselect "float ~ float"
 		randomselect "float + float"
@@ -115,8 +115,8 @@ build_random_expression() {
 		randomselect "vector / vector float"
 		randomselect "float % float float"
 		randomselect "vector >< vector vector"
-		#randomselect "float >> float float" # Does weird & 0xFFFFFF.
-		#randomselect "float << float float" # Does weird & 0xFFFFFF.
+		randomselect "float >> float float"
+		randomselect "float << float float"
 		randomselect "float < float float"
 		randomselect "float > float float"
 		randomselect "float <=> float float"
