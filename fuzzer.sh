@@ -92,7 +92,7 @@ build_random_expression() {
 	esac
 	while :; do
 		randomselect_init
-		#randomselect "float ** float float"
+		#randomselect "float ** float float" # BUG: (-1)**(3) is nan vs -1. exec.c lacks pow(), that's why.
 		randomselect "float ! float"
 		randomselect "float ~ float"
 		randomselect "float + float"
@@ -113,10 +113,10 @@ build_random_expression() {
 		done
 		randomselect "float / float float"
 		randomselect "vector / vector float"
-		#randomselect "float % float float"
+		randomselect "float % float float"
 		randomselect "vector >< vector vector"
-		#randomselect "float >> float float"
-		#randomselect "float << float float"
+		#randomselect "float >> float float" # Does weird & 0xFFFFFF.
+		#randomselect "float << float float" # Does weird & 0xFFFFFF.
 		randomselect "float < float float"
 		randomselect "float > float float"
 		randomselect "float <=> float float"
@@ -210,14 +210,25 @@ var string s = "s";
 var float f = 134217728;
 var vector v = '-134217728 17 0.03125';
 $vars;
+float ne(float a, float b) {
+	if (a != a)
+		if (b != b)
+			return 0;
+	if (a == b)
+		return 0;
+	return 1;
+}
+float nev(vector a, vector b) {
+	return ne(a_x, b_x) || ne(a_y, b_y) || ne(a_z, b_z);
+}
 void check_float(string var_name, string expr_short, string expr_long, float a, float b) {
 	print(var_name, " = ", expr_short, "  // ", ftos(a), "\n");
-	if (a != b)
+	if (ne(a, b))
 		print(var_name, " != ", expr_long, "  // ", ftos(b), "\nFAIL\n");
 }
 void check_vector(string var_name, string expr_short, string expr_long, vector a, vector b) {
 	print(var_name, " = ", expr_short, "  // ", vtos(a), "\n");
-	if (a != b)
+	if (nev(a, b))
 		print(var_name, " != ", expr_long, "  // ", vtos(b), "\nFAIL\n");
 }
 void check_string(string var_name, string expr_short, string expr_long, string a, string b) {
