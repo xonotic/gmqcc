@@ -44,26 +44,6 @@ static GMQCC_INLINE void ir_bitlist_allocindex(ir_bitlist_t *self, size_t index)
         vec_push(self->bits, 0);
 }
 
-void ir_bitlist_setbit(ir_bitlist_t *self, size_t bit) {
-    size_t index = bit / GMQCC_BL_BITS;
-    ir_bitlist_allocindex(self, index);
-    self->bits[index] |= (1 << (bit % GMQCC_BL_BITS));
-}
-
-void ir_bitlist_unsetbit(ir_bitlist_t *self, size_t bit) {
-    size_t index = bit / GMQCC_BL_BITS;
-    ir_bitlist_allocindex(self, index);
-    self->bits[index] &= ~(1 << (bit % GMQCC_BL_BITS));
-}
-
-bool ir_bitlist_getbit(const ir_bitlist_t *self, size_t bit) {
-    size_t        index = bit / GMQCC_BL_BITS;
-    GMQCC_BL_TYPE mask  = 1 << (bit % GMQCC_BL_BITS);
-    if (index >= vec_size(self->bits))
-        return false;
-    return !!(self->bits[index] & mask);
-}
-
 void ir_bitlist_setrange(ir_bitlist_t *self, size_t from, size_t to) {
     size_t index_from, bit_from, index_to, bit_to;
     GMQCC_BL_TYPE mask;
@@ -117,17 +97,23 @@ static void ir_bitlist_dump(const ir_bitlist_t *self,
     oprintf("\n");
 }
 
-void ir_lifemask_init(ir_lifemask_t *self) {
+ir_lifemask_t *ir_lifemask_new(size_t size) {
+    ir_lifemask_t *self;
+    self        = (ir_lifemask_t*)mem_a(sizeof(*self));
     self->alive = ir_bitlist_new();
     self->dies  = ir_bitlist_new();
-    /*self->mask  = NULL;*/
+    self->used  = false;
+    ir_bitlist_allocindex(self->alive, size / GMQCC_BL_BITS);
+    ir_bitlist_allocindex(self->dies,  size / GMQCC_BL_BITS);
+    return self;
 }
 
-void ir_lifemask_clear(ir_lifemask_t *self) {
+void ir_lifemask_delete(ir_lifemask_t *self) {
     ir_bitlist_delete(self->alive);
     ir_bitlist_delete(self->dies);
     /*if (self->mask)
         ir_bitlist_delete(self->mask);*/
+    mem_d(self);
 }
 
 void ir_lifemask_merge(ir_lifemask_t *self, const ir_lifemask_t *other) {
@@ -136,8 +122,10 @@ void ir_lifemask_merge(ir_lifemask_t *self, const ir_lifemask_t *other) {
     if (!other_alive_size)
         return;
 
+    /*
     ir_bitlist_allocindex(self->alive, other_alive_size-1);
     ir_bitlist_allocindex(self->dies,  other_alive_size-1);
+    */
     /*if (self->mask)
         ir_bitlist_allocindex(self->mask,  other_alive_size-1);*/
 
@@ -148,6 +136,7 @@ void ir_lifemask_merge(ir_lifemask_t *self, const ir_lifemask_t *other) {
 
         /*if (self->mask)
             self->mask->bits[i] = self->alive->bits[i] & ~self->dies->bits[i];*/
+        self->used = self->alive->bits[i] || self->used;
     }
 }
 

@@ -1796,7 +1796,7 @@ bool ast_generate_accessors(ast_value *self, ir_builder *ir)
             compile_error(ast_ctx(self), "internal error: not all array values have been generated for `%s`", self->name);
             return false;
         }
-        if (self->ir_values[i]->life.alive->bits) {
+        if (self->ir_values[i]->life) {
             compile_error(ast_ctx(self), "internal error: function containing `%s` already generated", self->name);
             return false;
         }
@@ -1813,6 +1813,12 @@ bool ast_generate_accessors(ast_value *self, ir_builder *ir)
             return false;
         }
     }
+    for (i = 0; i < self->expression.count; ++i) {
+        if (self->ir_values[i]->life) {
+            ir_lifemask_delete(self->ir_values[i]->life);
+            self->ir_values[i]->life = NULL;
+        }
+    }
     if (self->getter) {
         if (!ast_global_codegen  (self->getter, ir, false) ||
             !ast_function_codegen(self->getter->constval.vfunc, ir) ||
@@ -1822,10 +1828,12 @@ bool ast_generate_accessors(ast_value *self, ir_builder *ir)
             opts_set(opts.warn, WARN_USED_UNINITIALIZED, warn);
             return false;
         }
-    }
-    for (i = 0; i < self->expression.count; ++i) {
-        ir_lifemask_clear(&self->ir_values[i]->life);
-        ir_lifemask_init (&self->ir_values[i]->life);
+        for (i = 0; i < self->expression.count; ++i) {
+            if (self->ir_values[i]->life) {
+                ir_lifemask_delete(self->ir_values[i]->life);
+                self->ir_values[i]->life = NULL;
+            }
+        }
     }
     opts_set(opts.warn, WARN_USED_UNINITIALIZED, warn);
     return true;

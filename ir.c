@@ -1117,7 +1117,7 @@ ir_value* ir_value_var(const char *name, int storetype, int vtype)
     self->locked      = false;
     self->callparam   = false;
 
-    ir_lifemask_init(&self->life);
+    self->life = NULL;
     return self;
 }
 
@@ -1212,7 +1212,8 @@ void ir_value_delete(ir_value* self)
     }
     vec_free(self->reads);
     vec_free(self->writes);
-    ir_lifemask_clear(&self->life);
+    if (self->life)
+        ir_lifemask_delete(self->life);
     mem_d(self);
 }
 
@@ -1282,30 +1283,31 @@ bool ir_value_set_int(ir_value *self, int i)
 
 bool ir_value_lives(ir_value *self, size_t at)
 {
-    return ir_bitlist_getbit(self->life.alive, at);
+    return ir_bitlist_getbit(self->life->alive, at);
 }
 
 GMQCC_INLINE static bool ir_value_life_merge(ir_value *self, size_t s, bool wr)
 {
-    bool was_set = ir_bitlist_getbit(self->life.alive, s);
-    ir_bitlist_setbit(self->life.alive, s);
+    bool was_set = ir_bitlist_getbit(self->life->alive, s);
+    self->life->used = true;
+    ir_bitlist_setbit(self->life->alive, s);
     if (wr) {
         /* avoid pointlife issues by not marking a write-only assignment as
          * dying here.
          */
-        if (ir_bitlist_getbit(self->life.alive, s+1))
-            ir_bitlist_setbit  (self->life.dies, s);
+        if (ir_bitlist_getbit(self->life->alive, s+1))
+            ir_bitlist_setbit  (self->life->dies, s);
         else /* still need to perform the write to cause an allocation */
-            ir_bitlist_unsetbit(self->life.dies, s);
+            ir_bitlist_unsetbit(self->life->dies, s);
     }
     else
-        ir_bitlist_unsetbit(self->life.dies,  s);
+        ir_bitlist_unsetbit(self->life->dies,  s);
     return !was_set;
 }
 
 static bool ir_values_overlap(const ir_value *a, const ir_value *b)
 {
-    return ir_lifemask_overlaps(&a->life, &b->life);
+    return ir_lifemask_overlaps(a->life, b->life);
 }
 
 /***********************************************************************
@@ -1931,6 +1933,7 @@ void ir_function_enumerate(ir_function *self)
         self->blocks[i]->eid = i;
         ir_block_enumerate(self->blocks[i], &instruction_id);
     }
+    self->max_eid = instruction_id;
 }
 
 /* Local-value allocator
@@ -1943,9 +1946,10 @@ typedef struct {
     size_t    *sizes;
     size_t    *positions;
     bool      *unique;
-} function_allocator;
+    size_t     max_eid;
+} temp_allocator;
 
-static bool function_allocator_alloc(function_allocator *alloc, ir_value *var)
+static bool temp_allocator_alloc(temp_allocator *alloc, ir_value *var)
 {
     ir_value *slot;
     size_t vsize = ir_value_sizeof(var);
@@ -1956,7 +1960,10 @@ static bool function_allocator_alloc(function_allocator *alloc, ir_value *var)
     if (!slot)
         return false;
 
-    ir_lifemask_merge(&slot->life, &var->life);
+    slot->life = ir_lifemask_new(alloc->max_eid);
+    /* arrays don't get to live :P */
+    if (var->life)
+        ir_lifemask_merge(slot->life, var->life);
 
     vec_push(alloc->locals, slot);
     vec_push(alloc->sizes, vsize);
@@ -1965,13 +1972,13 @@ static bool function_allocator_alloc(function_allocator *alloc, ir_value *var)
     return true;
 }
 
-static bool ir_function_allocator_assign(ir_function *self, function_allocator *alloc, ir_value *v)
+static bool ir_function_allocator_assign(ir_function *self, temp_allocator *alloc, ir_value *v)
 {
     size_t a;
     ir_value *slot;
 
     if (v->unique_life)
-        return function_allocator_alloc(alloc, v);
+        return temp_allocator_alloc(alloc, v);
 
     for (a = 0; a < vec_size(alloc->locals); ++a)
     {
@@ -1993,7 +2000,7 @@ static bool ir_function_allocator_assign(ir_function *self, function_allocator *
         if (ir_values_overlap(v, slot))
             continue;
 
-        ir_lifemask_merge(&slot->life, &v->life);
+        ir_lifemask_merge(slot->life, v->life);
 
         /* adjust size for this slot */
         if (alloc->sizes[a] < ir_value_sizeof(v))
@@ -2003,7 +2010,7 @@ static bool ir_function_allocator_assign(ir_function *self, function_allocator *
         return true;
     }
     if (a >= vec_size(alloc->locals)) {
-        if (!function_allocator_alloc(alloc, v))
+        if (!temp_allocator_alloc(alloc, v))
             return false;
     }
     return true;
@@ -2018,7 +2025,7 @@ bool ir_function_allocate_locals(ir_function *self)
 
     ir_value *v;
 
-    function_allocator lockalloc, globalloc;
+    temp_allocator lockalloc, globalloc;
 
     if (!vec_size(self->locals) && !vec_size(self->values))
         return true;
@@ -2027,10 +2034,12 @@ bool ir_function_allocate_locals(ir_function *self)
     globalloc.sizes     = NULL;
     globalloc.positions = NULL;
     globalloc.unique    = NULL;
+    globalloc.max_eid   = self->max_eid;
     lockalloc.locals    = NULL;
     lockalloc.sizes     = NULL;
     lockalloc.positions = NULL;
     lockalloc.unique    = NULL;
+    lockalloc.max_eid   = self->max_eid;
 
     for (i = 0; i < vec_size(self->locals); ++i)
     {
@@ -2043,13 +2052,13 @@ bool ir_function_allocate_locals(ir_function *self)
             break;
         else
             v->locked = true; /* lock parameters locals */
-        if (!function_allocator_alloc((v->locked || !opt_gt ? &lockalloc : &globalloc), v))
+        if (!temp_allocator_alloc((v->locked || !opt_gt ? &lockalloc : &globalloc), v))
             goto error;
     }
     for (; i < vec_size(self->locals); ++i)
     {
         v = self->locals[i];
-        if (!vec_size(v->life.alive->bits))
+        if (!v->life->used)
             continue;
         if (!ir_function_allocator_assign(self, (v->locked || !opt_gt ? &lockalloc : &globalloc), v))
             goto error;
@@ -2060,7 +2069,7 @@ bool ir_function_allocate_locals(ir_function *self)
     {
         v = self->values[i];
 
-        if (!vec_size(v->life.alive->bits))
+        if (!v->life || !v->life->used)
             continue;
 
         /* CALL optimization:
@@ -2245,6 +2254,61 @@ static bool ir_block_living_lock(ir_block *self)
     return changed;
 }
 
+/* check whether a value's liveness should be calculated */
+static bool ir_liveness_check(ir_value *value, ir_builder *builder)
+{
+    if (value == builder->nil)
+        return false;
+    return (value->store == store_value ||
+            value->store == store_local ||
+            value->store == store_param);
+}
+
+static bool ir_liveness_check_init(ir_value *value, ir_block *block)
+{
+    if (!ir_liveness_check(value, block->owner->owner))
+        return false;
+    if (!value->life)
+        value->life = ir_lifemask_new(block->owner->max_eid);
+    return true;
+}
+
+static bool ir_liveness_add_living(ir_block *self, ir_value *value)
+{
+    if (!vec_ir_value_find(self->living, value, NULL)) {
+        vec_push(self->living, value);
+        /* To debug inter-leaking ->life pointers...
+        if (value->life && vec_size(value->life->alive->bits) != 1+self->owner->max_eid/GMQCC_BL_BITS)
+            abort();
+        */
+        return true;
+    }
+    return false;
+}
+
+static void ir_liveness_vector_read(ir_block *self, ir_value *value)
+{
+    size_t mem;
+    if (!ir_liveness_check_init(value, self))
+        return;
+
+    if (value->memberof) {
+        if (ir_liveness_add_living(self, value->memberof)) {
+            if (!value->memberof->life)
+                value->memberof->life = ir_lifemask_new(self->owner->max_eid);
+        }
+    }
+    for (mem = 0; mem < 3; ++mem) {
+        if (!value->members[mem])
+            continue;
+        if (ir_liveness_add_living(self, value->members[mem])) {
+            if (!value->members[mem]->life)
+                value->members[mem]->life = ir_lifemask_new(self->owner->max_eid);
+        }
+    }
+}
+
+
 static bool ir_block_life_propagate(ir_block *self, bool *changed)
 {
     ir_instr *instr;
@@ -2263,10 +2327,8 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
     for (i = 0; i < p; ++i) {
         ir_block *prev = self->exits[i];
         cnt = vec_size(prev->living);
-        for (o = 0; o < cnt; ++o) {
-            if (!vec_ir_value_find(self->living, prev->living[o], NULL))
-                vec_push(self->living, prev->living[o]);
-        }
+        for (o = 0; o < cnt; ++o)
+            ir_liveness_add_living(self, prev->living[o]);
     }
 
     i = vec_size(self->instr);
@@ -2290,9 +2352,7 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             /* We only care about locals */
             /* we also calculate parameter liferanges so that locals
              * can take up parameter slots */
-            if (value->store != store_value &&
-                value->store != store_local &&
-                value->store != store_param)
+            if (!ir_liveness_check_init(value, self))
                 continue;
 
             /* write operands */
@@ -2362,11 +2422,17 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             instr->opcode == VINSTR_CROSS)
         {
             value = instr->_ops[2];
-            /* the float source will get an additional lifetime */
-            if (ir_value_life_merge(value, instr->eid+1, false))
-                *changed = true;
-            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1, false))
-                *changed = true;
+            if (ir_liveness_check_init(value, self)) {
+                /* the float source will get an additional lifetime */
+                if (ir_value_life_merge(value, instr->eid+1, false))
+                    *changed = true;
+                if (value->memberof) {
+                    if (!value->memberof->life)
+                        value->memberof->life = ir_lifemask_new(self->owner->max_eid);
+                    if (ir_value_life_merge(value->memberof, instr->eid+1, false))
+                        *changed = true;
+                }
+            }
         }
 
         if (instr->opcode == INSTR_MUL_FV ||
@@ -2377,11 +2443,17 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             instr->opcode == VINSTR_CROSS)
         {
             value = instr->_ops[1];
-            /* the float source will get an additional lifetime */
-            if (ir_value_life_merge(value, instr->eid+1, false))
-                *changed = true;
-            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1, false))
-                *changed = true;
+            if (ir_liveness_check_init(value, self)) {
+                /* the float source will get an additional lifetime */
+                if (ir_value_life_merge(value, instr->eid+1, false))
+                    *changed = true;
+                if (value->memberof) {
+                    if (!value->memberof->life)
+                        value->memberof->life = ir_lifemask_new(self->owner->max_eid);
+                    if (ir_value_life_merge(value->memberof, instr->eid+1, false))
+                        *changed = true;
+                }
+            }
         }
 
         for (o = 0; o < 3; ++o)
@@ -2394,37 +2466,25 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
             /* We only care about locals */
             /* we also calculate parameter liferanges so that locals
              * can take up parameter slots */
-            if (value->store != store_value &&
-                value->store != store_local &&
-                value->store != store_param)
+            if (!ir_liveness_check_init(value, self))
                 continue;
 
             /* read operands */
             if (read & (1<<o))
             {
-                if (!vec_ir_value_find(self->living, value, NULL))
-                    vec_push(self->living, value);
+                ir_liveness_add_living(self, value);
                 /* reading adds the full vector */
-                if (value->memberof && !vec_ir_value_find(self->living, value->memberof, NULL))
-                    vec_push(self->living, value->memberof);
-                for (mem = 0; mem < 3; ++mem) {
-                    if (value->members[mem] && !vec_ir_value_find(self->living, value->members[mem], NULL))
-                        vec_push(self->living, value->members[mem]);
-                }
+                ir_liveness_vector_read(self, value);
             }
         }
         /* PHI operands are always read operands */
         for (p = 0; p < vec_size(instr->phi); ++p)
         {
             value = instr->phi[p].value;
-            if (!vec_ir_value_find(self->living, value, NULL))
-                vec_push(self->living, value);
-            /* reading adds the full vector */
-            if (value->memberof && !vec_ir_value_find(self->living, value->memberof, NULL))
-                vec_push(self->living, value->memberof);
-            for (mem = 0; mem < 3; ++mem) {
-                if (value->members[mem] && !vec_ir_value_find(self->living, value->members[mem], NULL))
-                    vec_push(self->living, value->members[mem]);
+            if (ir_liveness_check_init(value, self)) {
+                ir_liveness_add_living(self, value);
+                /* reading adds the full vector */
+                ir_liveness_vector_read(self, value);
             }
         }
 
@@ -2437,14 +2497,10 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
         for (p = 0; p < vec_size(instr->params); ++p)
         {
             value = instr->params[p];
-            if (!vec_ir_value_find(self->living, value, NULL))
-                vec_push(self->living, value);
-            /* reading adds the full vector */
-            if (value->memberof && !vec_ir_value_find(self->living, value->memberof, NULL))
-                vec_push(self->living, value->memberof);
-            for (mem = 0; mem < 3; ++mem) {
-                if (value->members[mem] && !vec_ir_value_find(self->living, value->members[mem], NULL))
-                    vec_push(self->living, value->members[mem]);
+            if (ir_liveness_check_init(value, self)) {
+                ir_liveness_add_living(self, value);
+                /* reading adds the full vector */
+                ir_liveness_vector_read(self, value);
             }
         }
 
@@ -2479,9 +2535,12 @@ bool ir_function_calculate_liferanges(ir_function *self)
     bool changed;
 
     /* parameters live at 0 */
-    for (i = 0; i < vec_size(self->params); ++i)
+    for (i = 0; i < vec_size(self->params); ++i) {
+        if (!self->locals[i]->life)
+            self->locals[i]->life = ir_lifemask_new(self->max_eid);
         if (!ir_value_life_merge(self->locals[i], 0, true))
             compile_error(self->context, "internal error: failed value-life merging");
+    }
 
     do {
         self->run_id++;
@@ -2502,7 +2561,7 @@ bool ir_function_calculate_liferanges(ir_function *self)
                 continue;
             self->flags |= IR_FLAG_HAS_UNINITIALIZED;
             /* find the instruction reading from it */
-            firstinstr = ir_bitlist_find_first(v->life.alive); /* used here and later at (FI) */
+            firstinstr = ir_bitlist_find_first(v->life->alive); /* used here and later at (FI) */
             for (s = 0; s < vec_size(v->reads); ++s) {
                 if (v->reads[s]->eid == firstinstr)
                     break;
@@ -2993,7 +3052,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
 
             retvalue = instr->_ops[0];
             if (retvalue && retvalue->store != store_return &&
-                (retvalue->store == store_global || vec_size(retvalue->life.alive->bits)))
+                (retvalue->store == store_global || retvalue->life->used))
             {
                 /* not to be kept in OFS_RETURN */
                 if (retvalue->vtype == TYPE_FIELD && OPTS_FLAG(ADJUST_VECTOR_FIELDS))
@@ -3916,15 +3975,15 @@ void ir_function_dump(ir_function *f, char *ind,
                 storenames[v->store],
                 attr, (v->callparam ? "callparam " : ""),
                 (int)v->code.local);
-        if (!v->life.alive->bits)
+        if (!v->life)
             oprintf("[null]");
-        ir_lifemask_dump(&v->life, ind, oprintf);
+        ir_lifemask_dump(v->life, ind, oprintf);
         for (m = 0; m < 3; ++m) {
             ir_value *vm = v->members[m];
             if (!vm)
                 continue;
             oprintf("%s\t%s: @%i ", ind, vm->name, (int)vm->code.local);
-            ir_lifemask_dump(&vm->life, ind, oprintf);
+            ir_lifemask_dump(vm->life, ind, oprintf);
         }
     }
     for (i = 0; i < vec_size(f->values); ++i) {
@@ -3941,9 +4000,9 @@ void ir_function_dump(ir_function *f, char *ind,
                 storenames[v->store],
                 attr, (v->callparam ? "callparam " : ""),
                 (int)v->code.local);
-        if (!v->life.alive->bits)
+        if (!v->life)
             oprintf("[null]");
-        ir_lifemask_dump(&v->life, ind, oprintf);
+        ir_lifemask_dump(v->life, ind, oprintf);
         oprintf("\n");
         for (m = 0; m < 3; ++m) {
             ir_value *vm = v->members[m];
@@ -3956,7 +4015,7 @@ void ir_function_dump(ir_function *f, char *ind,
             else if (vm->locked)
                 attr = "locked ";
             oprintf("%s\t%s: %s@%i ", ind, vm->name, attr, (int)vm->code.local);
-            ir_lifemask_dump(&vm->life, ind, oprintf);
+            ir_lifemask_dump(vm->life, ind, oprintf);
         }
     }
     if (vec_size(f->blocks))
@@ -4119,5 +4178,8 @@ void ir_value_dump(ir_value* v, int (*oprintf)(const char*, ...))
 void ir_value_dump_life(const ir_value *self, int (*oprintf)(const char*,...))
 {
     oprintf("Life of %12s:", self->name);
-    ir_lifemask_dump(&self->life, "  ", oprintf);
+    if (!self->life)
+        oprintf("[null]");
+    else
+        ir_lifemask_dump(self->life, "  ", oprintf);
 }

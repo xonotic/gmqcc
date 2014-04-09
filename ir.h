@@ -94,7 +94,7 @@ struct ir_value_s {
     bool locked;           /* temps living during a CALL must be locked */
     bool callparam;
 
-    ir_lifemask_t life; /* For the temp allocator */
+    ir_lifemask_t *life; /* For the temp allocator */
 };
 
 /*
@@ -214,6 +214,7 @@ struct ir_function_s {
 
     ir_block*  first;
     ir_block*  last;
+    size_t     max_eid;
 
     lex_ctx_t  context;
 

@@ -23,8 +23,8 @@
 #ifndef GMQCC_LIVENESS_HDR
 #define GMQCC_LIVENESS_HDR
 
-#define GMQCC_BL_BITS 8
-#define GMQCC_BL_FULL 0xF
+#define GMQCC_BL_BITS 32
+#define GMQCC_BL_FULL 0xFFFFFFFF
 #define GMQCC_BL_MAKETYPE1(TY) uint##TY##_t
 #define GMQCC_BL_MAKETYPE(TY) GMQCC_BL_MAKETYPE1(TY)
 #define GMQCC_BL_TYPE GMQCC_BL_MAKETYPE(GMQCC_BL_BITS)
@@ -34,9 +34,6 @@ typedef struct {
 
 ir_bitlist_t *ir_bitlist_new     (void);
 void          ir_bitlist_delete  (ir_bitlist_t*);
-void          ir_bitlist_setbit  (ir_bitlist_t*,       size_t bit);
-void          ir_bitlist_unsetbit(ir_bitlist_t*,       size_t bit);
-bool          ir_bitlist_getbit  (const ir_bitlist_t*, size_t bit);
 /* precondition: from <= to */
 void          ir_bitlist_setrange(ir_bitlist_t*, size_t from, size_t to);
 
@@ -50,11 +47,14 @@ typedef struct {
      * used to mask out that specific instruction before checking whether
      * a value's lifetime overlaps with another's.
      */
+
+    /* also note whether a value was alive at all anywhere: */
+    bool          used;
 } ir_lifemask_t;
 
-void ir_lifemask_init    (ir_lifemask_t*);
-void ir_lifemask_clear   (ir_lifemask_t*);
-void ir_lifemask_merge   (ir_lifemask_t*, const ir_lifemask_t*);
+ir_lifemask_t *ir_lifemask_new   (size_t size);
+void           ir_lifemask_delete(ir_lifemask_t*);
+void           ir_lifemask_merge (ir_lifemask_t*, const ir_lifemask_t*);
 
 /*void ir_lifemask_setmask (ir_lifemask_t*);*/
 bool ir_lifemask_overlaps(const ir_lifemask_t*, const ir_lifemask_t*);
@@ -62,5 +62,24 @@ bool ir_lifemask_overlaps(const ir_lifemask_t*, const ir_lifemask_t*);
 /* debug */
 void ir_lifemask_dump(const ir_lifemask_t *self, const char *ind,
                       int (*oprintf)(const char*, ...));
+
+/* inlined functions */
+GMQCC_INLINE static void ir_bitlist_setbit(ir_bitlist_t *self, size_t bit) {
+    size_t index = bit / GMQCC_BL_BITS;
+    /*ir_bitlist_allocindex(self, index);*/
+    self->bits[index] |= (1 << (bit % GMQCC_BL_BITS));
+}
+
+GMQCC_INLINE static void ir_bitlist_unsetbit(ir_bitlist_t *self, size_t bit) {
+    size_t index = bit / GMQCC_BL_BITS;
+    /*ir_bitlist_allocindex(self, index);*/
+    self->bits[index] &= ~(1 << (bit % GMQCC_BL_BITS));
+}
+
+GMQCC_INLINE static bool ir_bitlist_getbit(const ir_bitlist_t *self, size_t bit) {
+    size_t        index = bit / GMQCC_BL_BITS;
+    GMQCC_BL_TYPE mask  = 1 << (bit % GMQCC_BL_BITS);
+    return !!(self->bits[index] & mask);
+}
 
 #endif
