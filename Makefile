@@ -153,13 +153,14 @@ pak.o: gmqcc.h opts.def
 test.o: gmqcc.h opts.def platform.h
 main.o: gmqcc.h opts.def lexer.h
 lexer.o: gmqcc.h opts.def lexer.h
-parser.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h
+parser.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h liveness.h
 code.o: gmqcc.h opts.def
-ast.o: gmqcc.h opts.def ast.h ir.h parser.h lexer.h
-ir.o: gmqcc.h opts.def ir.h
+ast.o: gmqcc.h opts.def ast.h ir.h liveness.h parser.h lexer.h
+ir.o: gmqcc.h opts.def ir.h liveness.h
 ftepp.o: gmqcc.h opts.def lexer.h
 utf8.o: gmqcc.h opts.def
 correct.o: gmqcc.h opts.def
-fold.o: ast.h ir.h gmqcc.h opts.def parser.h lexer.h
-intrin.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h
+fold.o: ast.h ir.h gmqcc.h opts.def liveness.h parser.h lexer.h
+intrin.o: parser.h gmqcc.h opts.def lexer.h ast.h ir.h liveness.h
+liveness.o: gmqcc.h opts.def liveness.h
 exec.o: gmqcc.h opts.def
