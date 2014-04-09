@@ -66,13 +66,11 @@ void ir_lifemask_dump(const ir_lifemask_t *self, const char *ind,
 /* inlined functions */
 GMQCC_INLINE static void ir_bitlist_setbit(ir_bitlist_t *self, size_t bit) {
     size_t index = bit / GMQCC_BL_BITS;
-    /*ir_bitlist_allocindex(self, index);*/
     self->bits[index] |= (1 << (bit % GMQCC_BL_BITS));
 }
 
 GMQCC_INLINE static void ir_bitlist_unsetbit(ir_bitlist_t *self, size_t bit) {
     size_t index = bit / GMQCC_BL_BITS;
-    /*ir_bitlist_allocindex(self, index);*/
     self->bits[index] &= ~(1 << (bit % GMQCC_BL_BITS));
 }
 

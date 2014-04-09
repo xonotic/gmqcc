@@ -1286,6 +1286,10 @@ bool ir_value_lives(ir_value *self, size_t at)
     return ir_bitlist_getbit(self->life->alive, at);
 }
 
+/* TODO:
+ * Should try adding in ranges whenever a value enters/leaves the living set
+ * instead of adding each instruction separately!
+ */
 GMQCC_INLINE static bool ir_value_life_merge(ir_value *self, size_t s, bool wr)
 {
     bool was_set = ir_bitlist_getbit(self->life->alive, s);
@@ -1297,8 +1301,12 @@ GMQCC_INLINE static bool ir_value_life_merge(ir_value *self, size_t s, bool wr)
          */
         if (ir_bitlist_getbit(self->life->alive, s+1))
             ir_bitlist_setbit  (self->life->dies, s);
-        else /* still need to perform the write to cause an allocation */
+        /* when using dynamically allocated bitfields we still need to cause it
+         * to allocate here.
+         * (but we're not currently)
+        else
             ir_bitlist_unsetbit(self->life->dies, s);
+         */
     }
     else
         ir_bitlist_unsetbit(self->life->dies,  s);

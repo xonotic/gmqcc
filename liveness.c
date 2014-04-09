@@ -111,8 +111,6 @@ ir_lifemask_t *ir_lifemask_new(size_t size) {
 void ir_lifemask_delete(ir_lifemask_t *self) {
     ir_bitlist_delete(self->alive);
     ir_bitlist_delete(self->dies);
-    /*if (self->mask)
-        ir_bitlist_delete(self->mask);*/
     mem_d(self);
 }
 
@@ -122,41 +120,13 @@ void ir_lifemask_merge(ir_lifemask_t *self, const ir_lifemask_t *other) {
     if (!other_alive_size)
         return;
 
-    /*
-    ir_bitlist_allocindex(self->alive, other_alive_size-1);
-    ir_bitlist_allocindex(self->dies,  other_alive_size-1);
-    */
-    /*if (self->mask)
-        ir_bitlist_allocindex(self->mask,  other_alive_size-1);*/
-
     for (i = 0; i != other_alive_size; ++i) {
         self->alive->bits[i] |= other->alive->bits[i];
         self->dies->bits[i]  &= ~self->alive->bits[i];
         self->dies->bits[i]  |= ~other->alive->bits[i] & other->dies->bits[i];
-
-        /*if (self->mask)
-            self->mask->bits[i] = self->alive->bits[i] & ~self->dies->bits[i];*/
         self->used = self->alive->bits[i] || self->used;
     }
 }
-
-/*
-void ir_lifemask_setmask(ir_lifemask_t *self) {
-    size_t i;
-    size_t size;
-
-    if (!self->mask)
-        self->mask = ir_bitlist_new();
-
-    size = vec_size(self->alive->bits);
-    if (!size)
-        return;
-
-    ir_bitlist_allocindex(self->mask, size-1);
-    for (i = 0; i != size; ++i)
-        self->mask->bits[i] = self->alive->bits[i] & ~self->dies->bits[i];
-}
-*/
 
 bool ir_lifemask_overlaps(const ir_lifemask_t *a, const ir_lifemask_t *b) {
     size_t i;
@@ -180,59 +150,5 @@ void ir_lifemask_dump(const ir_lifemask_t *self, const char *ind,
     ir_bitlist_dump(self->alive, oprintf);
     oprintf("%s  ", ind);
     ir_bitlist_dump(self->dies, oprintf);
-    /*oprintf("%s  ", ind);
-    ir_bitlist_dump(self->mask, oprintf);*/
     oprintf("%s}\n", ind);
 }
-
-#ifdef LIVETEST
-#include <stdio.h>
-void test_liveness() {
-    con_init();
-    ir_bitlist_t *bl = ir_bitlist_new();
-    ir_bitlist_dump(bl);
-    ir_bitlist_setbit(bl, 1);
-    ir_bitlist_dump(bl);
-    ir_bitlist_setbit(bl, 2);
-    ir_bitlist_dump(bl);
-    ir_bitlist_setrange(bl, 4, 6);
-    ir_bitlist_dump(bl);
-    ir_bitlist_setrange(bl, 8, 9);
-    ir_bitlist_dump(bl);
-    ir_bitlist_setrange(bl, 15, 17);
-    ir_bitlist_dump(bl);
-    ir_bitlist_delete(bl);
-
-    ir_lifemask_t ma, mb;
-    ir_lifemask_init(&ma);
-    ir_lifemask_init(&mb);
-
-    ir_bitlist_setrange(ma.alive, 4, 6);
-    ir_bitlist_setbit(ma.dies,  4);
-    ir_lifemask_dump(&ma);
-
-    ir_bitlist_setrange(mb.alive, 6, 8);
-    ir_bitlist_setbit(mb.dies,  6);
-    ir_lifemask_dump(&mb);
-    con_out(ir_lifemask_overlaps(&ma, &mb) ? "WRONG OVERLAP\n" : "Ok\n");
-
-    ir_bitlist_setrange(mb.alive, 9, 12);
-    ir_bitlist_setbit(mb.dies,  9);
-    ir_lifemask_dump(&mb);
-    con_out(ir_lifemask_overlaps(&ma, &mb) ? "WRONG OVERLAP\n" : "Ok\n");
-
-    ir_bitlist_setrange(mb.alive, 5, 7);
-    ir_bitlist_unsetbit(mb.dies,  6);
-    ir_bitlist_setbit(mb.dies,  5);
-    ir_lifemask_dump(&mb);
-    con_out(ir_lifemask_overlaps(&ma, &mb) ? "overlap\n" : "WRONG ! OVERLAPPING\n");
-
-    ir_lifemask_clear(&ma);
-    ir_lifemask_clear(&mb);
-}
-
-int main() {
-    test_liveness();
-    return 0;
-}
-#endif
