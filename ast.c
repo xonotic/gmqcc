@@ -27,6 +27,7 @@
 #include "gmqcc.h"
 #include "ast.h"
 #include "parser.h"
+#include "liveness.h"
 
 #define ast_instantiate(T, ctx, destroyfn)                          \
     T* self = (T*)mem_a(sizeof(T));                                 \
@@ -1795,7 +1796,7 @@ bool ast_generate_accessors(ast_value *self, ir_builder *ir)
             compile_error(ast_ctx(self), "internal error: not all array values have been generated for `%s`", self->name);
             return false;
         }
-        if (self->ir_values[i]->life) {
+        if (self->ir_values[i]->life.alive->bits) {
             compile_error(ast_ctx(self), "internal error: function containing `%s` already generated", self->name);
             return false;
         }
@@ -1823,7 +1824,8 @@ bool ast_generate_accessors(ast_value *self, ir_builder *ir)
         }
     }
     for (i = 0; i < self->expression.count; ++i) {
-        vec_free(self->ir_values[i]->life);
+        ir_lifemask_clear(&self->ir_values[i]->life);
+        ir_lifemask_init (&self->ir_values[i]->life);
     }
     opts_set(opts.warn, WARN_USED_UNINITIALIZED, warn);
     return true;

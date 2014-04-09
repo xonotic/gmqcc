@@ -23,6 +23,7 @@
 #ifndef GMQCC_IR_HDR
 #define GMQCC_IR_HDR
 #include "gmqcc.h"
+#include "liveness.h"
 
 /*
  * Type large enough to hold all the possible IR flags. This should be
@@ -35,12 +36,6 @@ typedef struct ir_instr_s    ir_instr;
 typedef struct ir_block_s    ir_block;
 typedef struct ir_function_s ir_function;
 typedef struct ir_builder_s  ir_builder;
-
-typedef struct {
-    /* both inclusive */
-    size_t start;
-    size_t end;
-} ir_life_entry_t;
 
 enum {
     IR_FLAG_HAS_ARRAYS           = 1 << 0,
@@ -99,7 +94,7 @@ struct ir_value_s {
     bool locked;           /* temps living during a CALL must be locked */
     bool callparam;
 
-    ir_life_entry_t *life; /* For the temp allocator */
+    ir_lifemask_t life; /* For the temp allocator */
 };
 
 /*

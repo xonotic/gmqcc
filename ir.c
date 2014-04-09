@@ -1117,7 +1117,7 @@ ir_value* ir_value_var(const char *name, int storetype, int vtype)
     self->locked      = false;
     self->callparam   = false;
 
-    self->life = NULL;
+    ir_lifemask_init(&self->life);
     return self;
 }
 
@@ -1212,7 +1212,7 @@ void ir_value_delete(ir_value* self)
     }
     vec_free(self->reads);
     vec_free(self->writes);
-    vec_free(self->life);
+    ir_lifemask_clear(&self->life);
     mem_d(self);
 }
 
@@ -1282,217 +1282,30 @@ bool ir_value_set_int(ir_value *self, int i)
 
 bool ir_value_lives(ir_value *self, size_t at)
 {
-    size_t i;
-    for (i = 0; i < vec_size(self->life); ++i)
-    {
-        ir_life_entry_t *life = &self->life[i];
-        if (life->start <= at && at <= life->end)
-            return true;
-        if (life->start > at) /* since it's ordered */
-            return false;
-    }
-    return false;
+    return ir_bitlist_getbit(self->life.alive, at);
 }
 
-static bool ir_value_life_insert(ir_value *self, size_t idx, ir_life_entry_t e)
+GMQCC_INLINE static bool ir_value_life_merge(ir_value *self, size_t s, bool wr)
 {
-    size_t k;
-    vec_push(self->life, e);
-    for (k = vec_size(self->life)-1; k > idx; --k)
-        self->life[k] = self->life[k-1];
-    self->life[idx] = e;
-    return true;
-}
-
-static bool ir_value_life_merge(ir_value *self, size_t s)
-{
-    size_t i;
-    const size_t vs = vec_size(self->life);
-    ir_life_entry_t *life = NULL;
-    ir_life_entry_t *before = NULL;
-    ir_life_entry_t new_entry;
-
-    /* Find the first range >= s */
-    for (i = 0; i < vs; ++i)
-    {
-        before = life;
-        life = &self->life[i];
-        if (life->start > s)
-            break;
+    bool was_set = ir_bitlist_getbit(self->life.alive, s);
+    ir_bitlist_setbit(self->life.alive, s);
+    if (wr) {
+        /* avoid pointlife issues by not marking a write-only assignment as
+         * dying here.
+         */
+        if (ir_bitlist_getbit(self->life.alive, s+1))
+            ir_bitlist_setbit  (self->life.dies, s);
+        else /* still need to perform the write to cause an allocation */
+            ir_bitlist_unsetbit(self->life.dies, s);
     }
-    /* nothing found? append */
-    if (i == vs) {
-        ir_life_entry_t e;
-        if (life && life->end+1 == s)
-        {
-            /* previous life range can be merged in */
-            life->end++;
-            return true;
-        }
-        if (life && life->end >= s)
-            return false;
-        e.start = e.end = s;
-        vec_push(self->life, e);
-        return true;
-    }
-    /* found */
-    if (before)
-    {
-        if (before->end + 1 == s &&
-            life->start - 1 == s)
-        {
-            /* merge */
-            before->end = life->end;
-            vec_remove(self->life, i, 1);
-            return true;
-        }
-        if (before->end + 1 == s)
-        {
-            /* extend before */
-            before->end++;
-            return true;
-        }
-        /* already contained */
-        if (before->end >= s)
-            return false;
-    }
-    /* extend */
-    if (life->start - 1 == s)
-    {
-        life->start--;
-        return true;
-    }
-    /* insert a new entry */
-    new_entry.start = new_entry.end = s;
-    return ir_value_life_insert(self, i, new_entry);
-}
-
-static bool ir_value_life_merge_into(ir_value *self, const ir_value *other)
-{
-    size_t i, myi;
-
-    if (!vec_size(other->life))
-        return true;
-
-    if (!vec_size(self->life)) {
-        size_t count = vec_size(other->life);
-        ir_life_entry_t *life = vec_add(self->life, count);
-        memcpy(life, other->life, count * sizeof(*life));
-        return true;
-    }
-
-    myi = 0;
-    for (i = 0; i < vec_size(other->life); ++i)
-    {
-        const ir_life_entry_t *life = &other->life[i];
-        while (true)
-        {
-            ir_life_entry_t *entry = &self->life[myi];
-
-            if (life->end+1 < entry->start)
-            {
-                /* adding an interval before entry */
-                if (!ir_value_life_insert(self, myi, *life))
-                    return false;
-                ++myi;
-                break;
-            }
-
-            if (life->start <  entry->start &&
-                life->end+1 >= entry->start)
-            {
-                /* starts earlier and overlaps */
-                entry->start = life->start;
-            }
-
-            if (life->end   >  entry->end &&
-                life->start <= entry->end+1)
-            {
-                /* ends later and overlaps */
-                entry->end = life->end;
-            }
-
-            /* see if our change combines it with the next ranges */
-            while (myi+1 < vec_size(self->life) &&
-                   entry->end+1 >= self->life[1+myi].start)
-            {
-                /* overlaps with (myi+1) */
-                if (entry->end < self->life[1+myi].end)
-                    entry->end = self->life[1+myi].end;
-                vec_remove(self->life, myi+1, 1);
-                entry = &self->life[myi];
-            }
-
-            /* see if we're after the entry */
-            if (life->start > entry->end)
-            {
-                ++myi;
-                /* append if we're at the end */
-                if (myi >= vec_size(self->life)) {
-                    vec_push(self->life, *life);
-                    break;
-                }
-                /* otherweise check the next range */
-                continue;
-            }
-            break;
-        }
-    }
-    return true;
+    else
+        ir_bitlist_unsetbit(self->life.dies,  s);
+    return !was_set;
 }
 
 static bool ir_values_overlap(const ir_value *a, const ir_value *b)
 {
-    /* For any life entry in A see if it overlaps with
-     * any life entry in B.
-     * Note that the life entries are orderes, so we can make a
-     * more efficient algorithm there than naively translating the
-     * statement above.
-     */
-
-    ir_life_entry_t *la, *lb, *enda, *endb;
-
-    /* first of all, if either has no life range, they cannot clash */
-    if (!vec_size(a->life) || !vec_size(b->life))
-        return false;
-
-    la = a->life;
-    lb = b->life;
-    enda = la + vec_size(a->life);
-    endb = lb + vec_size(b->life);
-    while (true)
-    {
-        /* check if the entries overlap, for that,
-         * both must start before the other one ends.
-         */
-        if (la->start < lb->end &&
-            lb->start < la->end)
-        {
-            return true;
-        }
-
-        /* entries are ordered
-         * one entry is earlier than the other
-         * that earlier entry will be moved forward
-         */
-        if (la->start < lb->start)
-        {
-            /* order: A B, move A forward
-             * check if we hit the end with A
-             */
-            if (++la == enda)
-                break;
-        }
-        else /* if (lb->start < la->start)  actually <= */
-        {
-            /* order: B A, move B forward
-             * check if we hit the end with B
-             */
-            if (++lb == endb)
-                break;
-        }
-    }
-    return false;
+    return ir_lifemask_overlaps(&a->life, &b->life);
 }
 
 /***********************************************************************
@@ -2143,18 +1956,13 @@ static bool function_allocator_alloc(function_allocator *alloc, ir_value *var)
     if (!slot)
         return false;
 
-    if (!ir_value_life_merge_into(slot, var))
-        goto localerror;
+    ir_lifemask_merge(&slot->life, &var->life);
 
     vec_push(alloc->locals, slot);
     vec_push(alloc->sizes, vsize);
     vec_push(alloc->unique, var->unique_life);
 
     return true;
-
-localerror:
-    ir_value_delete(slot);
-    return false;
 }
 
 static bool ir_function_allocator_assign(ir_function *self, function_allocator *alloc, ir_value *v)
@@ -2185,8 +1993,7 @@ static bool ir_function_allocator_assign(ir_function *self, function_allocator *
         if (ir_values_overlap(v, slot))
             continue;
 
-        if (!ir_value_life_merge_into(slot, v))
-            return false;
+        ir_lifemask_merge(&slot->life, &v->life);
 
         /* adjust size for this slot */
         if (alloc->sizes[a] < ir_value_sizeof(v))
@@ -2242,7 +2049,7 @@ bool ir_function_allocate_locals(ir_function *self)
     for (; i < vec_size(self->locals); ++i)
     {
         v = self->locals[i];
-        if (!vec_size(v->life))
+        if (!vec_size(v->life.alive->bits))
             continue;
         if (!ir_function_allocator_assign(self, (v->locked || !opt_gt ? &lockalloc : &globalloc), v))
             goto error;
@@ -2253,7 +2060,7 @@ bool ir_function_allocate_locals(ir_function *self)
     {
         v = self->values[i];
 
-        if (!vec_size(v->life))
+        if (!vec_size(v->life.alive->bits))
             continue;
 
         /* CALL optimization:
@@ -2418,7 +2225,7 @@ static bool ir_block_living_add_instr(ir_block *self, size_t eid)
     bool         changed = false;
     for (i = 0; i != vs; ++i)
     {
-        if (ir_value_life_merge(self->living[i], eid))
+        if (ir_value_life_merge(self->living[i], eid, false))
             changed = true;
     }
     return changed;
@@ -2507,14 +2314,14 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
                      * since this function is run multiple times.
                      */
                     /* con_err( "Value only written %s\n", value->name); */
-                    if (ir_value_life_merge(value, instr->eid))
+                    if (ir_value_life_merge(value, instr->eid, true))
                         *changed = true;
                 } else {
                     /* since 'living' won't contain it
                      * anymore, merge the value, since
                      * (A) doesn't.
                      */
-                    if (ir_value_life_merge(value, instr->eid))
+                    if (ir_value_life_merge(value, instr->eid, true))
                         *changed = true;
                     /* Then remove */
                     vec_remove(self->living, idx, 1);
@@ -2522,7 +2329,7 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
                 /* Removing a vector removes all members */
                 for (mem = 0; mem < 3; ++mem) {
                     if (value->members[mem] && vec_ir_value_find(self->living, value->members[mem], &idx)) {
-                        if (ir_value_life_merge(value->members[mem], instr->eid))
+                        if (ir_value_life_merge(value->members[mem], instr->eid, true))
                             *changed = true;
                         vec_remove(self->living, idx, 1);
                     }
@@ -2535,7 +2342,7 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
                             break;
                     }
                     if (mem == 3 && vec_ir_value_find(self->living, value, &idx)) {
-                        if (ir_value_life_merge(value, instr->eid))
+                        if (ir_value_life_merge(value, instr->eid, true))
                             *changed = true;
                         vec_remove(self->living, idx, 1);
                     }
@@ -2556,9 +2363,9 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
         {
             value = instr->_ops[2];
             /* the float source will get an additional lifetime */
-            if (ir_value_life_merge(value, instr->eid+1))
+            if (ir_value_life_merge(value, instr->eid+1, false))
                 *changed = true;
-            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1))
+            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1, false))
                 *changed = true;
         }
 
@@ -2571,9 +2378,9 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
         {
             value = instr->_ops[1];
             /* the float source will get an additional lifetime */
-            if (ir_value_life_merge(value, instr->eid+1))
+            if (ir_value_life_merge(value, instr->eid+1, false))
                 *changed = true;
-            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1))
+            if (value->memberof && ir_value_life_merge(value->memberof, instr->eid+1, false))
                 *changed = true;
         }
 
@@ -2652,14 +2459,28 @@ static bool ir_block_life_propagate(ir_block *self, bool *changed)
     return true;
 }
 
+static GMQCC_INLINE size_t ir_bitlist_find_first(const ir_bitlist_t *self)
+{
+    size_t i, size = vec_size(self->bits);
+    /* FIXME: optimize? only executed when a warning is issued though... */
+    for (i = 0; i != size; ++i) {
+        size_t bit;
+        for (bit = 0; bit != GMQCC_BL_BITS; ++bit) {
+            if (self->bits[i] & (1<<bit))
+                return bit + i*GMQCC_BL_BITS;
+        }
+    }
+    return 0;
+}
+
 bool ir_function_calculate_liferanges(ir_function *self)
 {
-    size_t i, s;
+    size_t i, s, firstinstr;
     bool changed;
 
     /* parameters live at 0 */
     for (i = 0; i < vec_size(self->params); ++i)
-        if (!ir_value_life_merge(self->locals[i], 0))
+        if (!ir_value_life_merge(self->locals[i], 0, true))
             compile_error(self->context, "internal error: failed value-life merging");
 
     do {
@@ -2681,8 +2502,9 @@ bool ir_function_calculate_liferanges(ir_function *self)
                 continue;
             self->flags |= IR_FLAG_HAS_UNINITIALIZED;
             /* find the instruction reading from it */
+            firstinstr = ir_bitlist_find_first(v->life.alive); /* used here and later at (FI) */
             for (s = 0; s < vec_size(v->reads); ++s) {
-                if (v->reads[s]->eid == v->life[0].end)
+                if (v->reads[s]->eid == firstinstr)
                     break;
             }
             if (s < vec_size(v->reads)) {
@@ -2700,7 +2522,7 @@ bool ir_function_calculate_liferanges(ir_function *self)
             if (v->memberof) {
                 ir_value *vec = v->memberof;
                 for (s = 0; s < vec_size(vec->reads); ++s) {
-                    if (vec->reads[s]->eid == v->life[0].end)
+                    if (vec->reads[s]->eid == firstinstr) /* (FI) */
                         break;
                 }
                 if (s < vec_size(vec->reads)) {
@@ -3171,7 +2993,7 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
 
             retvalue = instr->_ops[0];
             if (retvalue && retvalue->store != store_return &&
-                (retvalue->store == store_global || vec_size(retvalue->life)))
+                (retvalue->store == store_global || vec_size(retvalue->life.alive->bits)))
             {
                 /* not to be kept in OFS_RETURN */
                 if (retvalue->vtype == TYPE_FIELD && OPTS_FLAG(ADJUST_VECTOR_FIELDS))
@@ -4082,7 +3904,7 @@ void ir_function_dump(ir_function *f, char *ind,
     oprintf("%sliferanges:\n", ind);
     for (i = 0; i < vec_size(f->locals); ++i) {
         const char *attr = "";
-        size_t l, m;
+        size_t m;
         ir_value *v = f->locals[i];
         if (v->unique_life && v->locked)
             attr = "unique,locked ";
@@ -4094,26 +3916,20 @@ void ir_function_dump(ir_function *f, char *ind,
                 storenames[v->store],
                 attr, (v->callparam ? "callparam " : ""),
                 (int)v->code.local);
-        if (!v->life)
+        if (!v->life.alive->bits)
             oprintf("[null]");
-        for (l = 0; l < vec_size(v->life); ++l) {
-            oprintf("[%i,%i] ", v->life[l].start, v->life[l].end);
-        }
-        oprintf("\n");
+        ir_lifemask_dump(&v->life, ind, oprintf);
         for (m = 0; m < 3; ++m) {
             ir_value *vm = v->members[m];
             if (!vm)
                 continue;
             oprintf("%s\t%s: @%i ", ind, vm->name, (int)vm->code.local);
-            for (l = 0; l < vec_size(vm->life); ++l) {
-                oprintf("[%i,%i] ", vm->life[l].start, vm->life[l].end);
-            }
-            oprintf("\n");
+            ir_lifemask_dump(&vm->life, ind, oprintf);
         }
     }
     for (i = 0; i < vec_size(f->values); ++i) {
         const char *attr = "";
-        size_t l, m;
+        size_t m;
         ir_value *v = f->values[i];
         if (v->unique_life && v->locked)
             attr = "unique,locked ";
@@ -4125,11 +3941,9 @@ void ir_function_dump(ir_function *f, char *ind,
                 storenames[v->store],
                 attr, (v->callparam ? "callparam " : ""),
                 (int)v->code.local);
-        if (!v->life)
+        if (!v->life.alive->bits)
             oprintf("[null]");
-        for (l = 0; l < vec_size(v->life); ++l) {
-            oprintf("[%i,%i] ", v->life[l].start, v->life[l].end);
-        }
+        ir_lifemask_dump(&v->life, ind, oprintf);
         oprintf("\n");
         for (m = 0; m < 3; ++m) {
             ir_value *vm = v->members[m];
@@ -4142,10 +3956,7 @@ void ir_function_dump(ir_function *f, char *ind,
             else if (vm->locked)
                 attr = "locked ";
             oprintf("%s\t%s: %s@%i ", ind, vm->name, attr, (int)vm->code.local);
-            for (l = 0; l < vec_size(vm->life); ++l) {
-                oprintf("[%i,%i] ", vm->life[l].start, vm->life[l].end);
-            }
-            oprintf("\n");
+            ir_lifemask_dump(&vm->life, ind, oprintf);
         }
     }
     if (vec_size(f->blocks))
@@ -4307,10 +4118,6 @@ void ir_value_dump(ir_value* v, int (*oprintf)(const char*, ...))
 
 void ir_value_dump_life(const ir_value *self, int (*oprintf)(const char*,...))
 {
-    size_t i;
     oprintf("Life of %12s:", self->name);
-    for (i = 0; i < vec_size(self->life); ++i)
-    {
-        oprintf(" + [%i, %i]\n", self->life[i].start, self->life[i].end);
-    }
+    ir_lifemask_dump(&self->life, "  ", oprintf);
 }
