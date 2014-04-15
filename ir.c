@@ -2529,6 +2529,8 @@ static GMQCC_INLINE size_t ir_bitlist_find_first(const ir_bitlist_t *self)
     /* FIXME: optimize? only executed when a warning is issued though... */
     for (i = 0; i != size; ++i) {
         size_t bit;
+        if (!self->bits[i])
+            continue;
         for (bit = 0; bit != GMQCC_BL_BITS; ++bit) {
             if (self->bits[i] & (1<<bit))
                 return bit + i*GMQCC_BL_BITS;
