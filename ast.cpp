@@ -2746,7 +2746,8 @@ bool ast_switch::codegen(ast_function *func, bool lvalue, ir_value **out)
     if (m_cases.empty())
         return true;
 
-    cmpinstr = type_eq_instr[irop->m_vtype];
+    const auto switch_type = irop->m_vtype;
+    cmpinstr = type_eq_instr[switch_type];
     if (cmpinstr >= VINSTR_END) {
         ast_type_to_string(m_operand, typestr, sizeof(typestr));
         compile_error(m_context, "invalid type to perform a switch on: %s", typestr);
@@ -2771,6 +2772,11 @@ bool ast_switch::codegen(ast_function *func, bool lvalue, ir_value **out)
 
         if (swcase->m_value) {
             /* A regular case */
+            if (swcase->m_value->m_vtype != switch_type) {
+                ast_type_to_string(swcase->m_value, typestr, sizeof(typestr));
+                compile_error(m_context, "invalid type to perform a switch on: %s", typestr);
+                return false;
+            }
             /* generate the condition operand */
             if (!swcase->m_value->codegen(func, false, &val))
                 return false;
