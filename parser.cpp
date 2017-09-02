@@ -3401,21 +3401,20 @@ static bool parse_pragma_do(parser_t &parser)
 
 static bool parse_pragma(parser_t &parser)
 {
-    bool rv;
     parser.lex->flags.preprocessing = true;
     parser.lex->flags.mergelines = true;
-    rv = parse_pragma_do(parser);
+    auto ret = parse_pragma_do(parser);
     if (parser.tok != TOKEN_EOL) {
         parseerror(parser, "junk after pragma");
-        rv = false;
+        ret = false;
     }
     parser.lex->flags.preprocessing = false;
     parser.lex->flags.mergelines = false;
     if (!parser_next(parser)) {
         parseerror(parser, "parse error after pragma");
-        rv = false;
+        ret = false;
     }
-    return rv;
+    return ret;
 }
 
 static bool parse_statement(parser_t &parser, ast_block *block, ast_expression **out, bool allow_cases)
@@ -5114,56 +5113,56 @@ static bool parse_array(parser_t &parser, ast_value *array)
 
 static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofields, int qualifier, ast_value *cached_typedef, bool noref, bool is_static, uint32_t qflags, char *vstring)
 {
-    ast_value *var;
-    ast_value *proto;
-    ast_expression *old;
-    bool       was_end;
+    if (!localblock && is_static) {
+        parseerror(parser, "`static` qualifier is not supported in global scope");
+    }
+
+    // get the first complete variable
+    ast_value *basetype = nullptr;
+    auto var = parse_typename(parser, &basetype, cached_typedef, nullptr);
+    if (!var) {
+        if (basetype) {
+            delete basetype;
+        }
+        return false;
+    }
+
+    // while parsing types, the ast_value's get named '<something>'
+    if (!var->m_name.length() || var->m_name[0] == '<') {
+        parseerror(parser, "declaration does not declare anything");
+        if (basetype) {
+            delete basetype;
+        }
+        return false;
+    }
+
+
     size_t     i;
 
-    ast_value *basetype = nullptr;
-    bool      retval    = true;
     bool      isparam   = false;
     bool      isvector  = false;
     bool      cleanvar  = true;
-    bool      wasarray  = false;
 
     ast_member *me[3] = { nullptr, nullptr, nullptr };
     ast_member *last_me[3] = { nullptr, nullptr, nullptr };
 
-    if (!localblock && is_static)
-        parseerror(parser, "`static` qualifier is not supported in global scope");
-
-    /* get the first complete variable */
-    var = parse_typename(parser, &basetype, cached_typedef, nullptr);
-    if (!var) {
-        if (basetype)
-            delete basetype;
-        return false;
-    }
-
-    /* while parsing types, the ast_value's get named '<something>' */
-    if (!var->m_name.length() || var->m_name[0] == '<') {
-        parseerror(parser, "declaration does not declare anything");
-        if (basetype)
-            delete basetype;
-        return false;
-    }
-
+    bool retval = true;
     while (true) {
-        proto = nullptr;
-        wasarray = false;
+        ast_value *proto = nullptr;
+        bool wasarray = false;
 
-        /* Part 0: finish the type */
+        // Part 0: finish the type
         if (parser.tok == '(') {
-            if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC)
+            if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC) {
                 parseerror(parser, "C-style function syntax is not allowed in -std=qcc");
+            }
             var = parse_parameter_list(parser, var);
             if (!var) {
                 retval = false;
                 goto cleanup;
             }
         }
-        /* we only allow 1-dimensional arrays */
+        // we only allow 1-dimensional arrays
         if (parser.tok == '[') {
             wasarray = true;
             var = parse_arraysize(parser, var);
@@ -5174,12 +5173,13 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
         }
         if (parser.tok == '(' && wasarray) {
             parseerror(parser, "arrays as part of a return type is not supported");
-            /* we'll still parse the type completely for now */
+            // we'll still parse the type completely for now
         }
-        /* for functions returning functions */
+        // for functions returning functions
         while (parser.tok == '(') {
-            if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC)
+            if (OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC) {
                 parseerror(parser, "C-style function syntax is not allowed in -std=qcc");
+            }
             var = parse_parameter_list(parser, var);
             if (!var) {
                 retval = false;
@@ -5188,17 +5188,20 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
         }
 
         var->m_cvq = qualifier;
-        if (qflags & AST_FLAG_COVERAGE) /* specified in QC, drop our default */
+        if (qflags & AST_FLAG_COVERAGE) {
+            // specified in QC, drop our default
             var->m_flags &= ~(AST_FLAG_COVERAGE_MASK);
+        }
         var->m_flags |= qflags;
 
         /*
          * store the vstring back to var for alias and
          * deprecation messages.
          */
-        if (var->m_flags & AST_FLAG_DEPRECATED ||
-            var->m_flags & AST_FLAG_ALIAS)
+        if (var->m_flags & AST_FLAG_DEPRECATED
+            || var->m_flags & AST_FLAG_ALIAS) {
             var->m_desc = vstring;
+        }
 
         if (parser_find_global(parser, var->m_name) && var->m_flags & AST_FLAG_ALIAS) {
             parseerror(parser, "function aliases cannot be forward declared");
@@ -5214,14 +5217,16 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
          */
         if (var->m_name == "nil") {
             if (OPTS_FLAG(UNTYPED_NIL)) {
-                if (!localblock || !OPTS_FLAG(PERMISSIVE))
+                if (!localblock || !OPTS_FLAG(PERMISSIVE)) {
                     parseerror(parser, "name `nil` not allowed (try -fpermissive)");
-            } else
-                (void)!parsewarning(parser, WARN_RESERVED_NAMES, "variable name `nil` is reserved");
+                }
+            } else {
+                (void) parsewarning(parser, WARN_RESERVED_NAMES, "variable name `nil` is reserved");
+            }
         }
         if (!localblock) {
             /* Deal with end_sys_ vars */
-            was_end = false;
+            bool was_end = false;
             if (var->m_name == "end_sys_globals") {
                 var->m_flags |= AST_FLAG_NOREF;
                 parser.crc_globals = parser.globals.size();
@@ -5235,21 +5240,18 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
             if (was_end && var->m_vtype == TYPE_FIELD) {
                 if (parsewarning(parser, WARN_END_SYS_FIELDS,
                                  "global '%s' hint should not be a field",
-                                 parser_tokval(parser)))
-                {
+                                 parser_tokval(parser))) {
                     retval = false;
                     goto cleanup;
                 }
             }
 
-            if (!nofields && var->m_vtype == TYPE_FIELD)
-            {
+            if (!nofields && var->m_vtype == TYPE_FIELD) {
                 /* deal with field declarations */
-                old = parser_find_field(parser, var->m_name);
+                auto old = parser_find_field(parser, var->m_name);
                 if (old) {
                     if (parsewarning(parser, WARN_FIELD_REDECLARED, "field `%s` already declared here: %s:%i",
-                                     var->m_name, old->m_context.file, (int)old->m_context.line))
-                    {
+                                     var->m_name, old->m_context.file, (int)old->m_context.line)) {
                         retval = false;
                         goto cleanup;
                     }
@@ -5263,8 +5265,8 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
                     goto cleanup;
                     */
                 }
-                if ((OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC || OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_FTEQCC) &&
-                    (old = parser_find_global(parser, var->m_name)))
+                if ((OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC || OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_FTEQCC)
+                    && (old = parser_find_global(parser, var->m_name)))
                 {
                     parseerror(parser, "cannot declare a field and a global of the same name with -std=qcc");
                     parseerror(parser, "field `%s` already declared here: %s:%i",
@@ -5276,7 +5278,7 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
             else
             {
                 /* deal with other globals */
-                old = parser_find_global(parser, var->m_name);
+                auto old = parser_find_global(parser, var->m_name);
                 if (old && var->m_vtype == TYPE_FUNCTION && old->m_vtype == TYPE_FUNCTION)
                 {
                     /* This is a function which had a prototype */
@@ -5356,60 +5358,60 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
                 }
             }
         }
-        else /* it's not a global */
-        {
-            old = parser_find_local(parser, var->m_name, parser.variables.size()-1, &isparam);
-            if (old && !isparam) {
-                parseerror(parser, "local `%s` already declared here: %s:%i",
-                           var->m_name, old->m_context.file, (int)old->m_context.line);
-                retval = false;
-                goto cleanup;
-            }
-            /* doing this here as the above is just for a single scope */
-            old = parser_find_local(parser, var->m_name, 0, &isparam);
-            if (old && isparam) {
-                if (parsewarning(parser, WARN_LOCAL_SHADOWS,
-                                 "local `%s` is shadowing a parameter", var->m_name))
-                {
+        else { // it's not a global
+            if (auto old = parser_find_local(parser, var->m_name, parser.variables.size() - 1, &isparam)) {
+                if (!isparam) {
                     parseerror(parser, "local `%s` already declared here: %s:%i",
-                               var->m_name, old->m_context.file, (int)old->m_context.line);
+                               var->m_name, old->m_context.file, (int) old->m_context.line);
                     retval = false;
                     goto cleanup;
                 }
-                if (OPTS_OPTION_U32(OPTION_STANDARD) != COMPILER_GMQCC) {
-                    delete var;
-                    if (ast_istype(old, ast_value))
-                        var = proto = (ast_value*)old;
-                    else {
-                        var = nullptr;
-                        goto skipvar;
+            }
+            // doing this here as the above is just for a single scope
+            if (auto old = parser_find_local(parser, var->m_name, 0, &isparam)) {
+                if (isparam) {
+                    if (parsewarning(parser, WARN_LOCAL_SHADOWS,
+                                     "local `%s` is shadowing a parameter", var->m_name)) {
+                        parseerror(parser, "local `%s` already declared here: %s:%i",
+                                   var->m_name, old->m_context.file, (int) old->m_context.line);
+                        retval = false;
+                        goto cleanup;
+                    }
+                    if (OPTS_OPTION_U32(OPTION_STANDARD) != COMPILER_GMQCC) {
+                        delete var;
+                        if (ast_istype(old, ast_value))
+                            var = proto = (ast_value *) old;
+                        else {
+                            var = nullptr;
+                            goto skipvar;
+                        }
                     }
                 }
             }
         }
 
-        if (noref || parser.noref)
+        if (noref || parser.noref) {
             var->m_flags |= AST_FLAG_NOREF;
+        }
 
         /* Part 2:
          * Create the global/local, and deal with vector types.
          */
         if (!proto) {
-            if (var->m_vtype == TYPE_VECTOR)
+            if (var->m_vtype == TYPE_VECTOR) {
                 isvector = true;
-            else if (var->m_vtype == TYPE_FIELD &&
-                     var->m_next->m_vtype == TYPE_VECTOR)
+            } else if (var->m_vtype == TYPE_FIELD
+                       && var->m_next->m_vtype == TYPE_VECTOR) {
                 isvector = true;
+            }
 
-            if (isvector) {
-                if (!create_vector_members(var, me)) {
-                    retval = false;
-                    goto cleanup;
-                }
+            if (isvector && !create_vector_members(var, me)) {
+                retval = false;
+                goto cleanup;
             }
 
             if (!localblock) {
-                /* deal with global variables, fields, functions */
+                // deal with global variables, fields, functions
                 if (!nofields && var->m_vtype == TYPE_FIELD && parser.tok != '=') {
                     var->m_isfield = true;
                     parser.fields.push_back(var);
@@ -5420,54 +5422,51 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
                             util_htset(parser.htfields, me[i]->m_name.c_str(), me[i]);
                         }
                     }
-                }
-                else {
-                    if (!(var->m_flags & AST_FLAG_ALIAS)) {
-                        parser_addglobal(parser, var->m_name, var);
-                        if (isvector) {
-                            for (i = 0; i < 3; ++i) {
-                                parser_addglobal(parser, me[i]->m_name.c_str(), me[i]);
-                            }
+                } else if (!(var->m_flags & AST_FLAG_ALIAS)) {
+                    parser_addglobal(parser, var->m_name, var);
+                    if (isvector) {
+                        for (i = 0; i < 3; ++i) {
+                            parser_addglobal(parser, me[i]->m_name.c_str(), me[i]);
                         }
-                    } else {
-                        ast_expression *find  = parser_find_global(parser, var->m_desc);
+                    }
+                } else {
+                    ast_expression *find  = parser_find_global(parser, var->m_desc);
 
-                        if (!find) {
-                            compile_error(parser_ctx(parser), "undeclared variable `%s` for alias `%s`", var->m_desc, var->m_name);
-                            return false;
-                        }
+                    if (!find) {
+                        compile_error(parser_ctx(parser), "undeclared variable `%s` for alias `%s`", var->m_desc, var->m_name);
+                        return false;
+                    }
 
-                        if (!var->compareType(*find)) {
-                            char ty1[1024];
-                            char ty2[1024];
+                    if (!var->compareType(*find)) {
+                        char ty1[1024];
+                        char ty2[1024];
 
-                            ast_type_to_string(find, ty1, sizeof(ty1));
-                            ast_type_to_string(var,  ty2, sizeof(ty2));
+                        ast_type_to_string(find, ty1, sizeof(ty1));
+                        ast_type_to_string(var,  ty2, sizeof(ty2));
 
-                            compile_error(parser_ctx(parser), "incompatible types `%s` and `%s` for alias `%s`",
-                                ty1, ty2, var->m_name
-                            );
-                            return false;
-                        }
+                        compile_error(parser_ctx(parser), "incompatible types `%s` and `%s` for alias `%s`",
+                            ty1, ty2, var->m_name
+                        );
+                        return false;
+                    }
 
-                        util_htset(parser.aliases, var->m_name.c_str(), find);
+                    util_htset(parser.aliases, var->m_name.c_str(), find);
 
-                        /* generate aliases for vector components */
-                        if (isvector) {
-                            char *buffer[3];
+                    /* generate aliases for vector components */
+                    if (isvector) {
+                        char *buffer[3];
 
-                            util_asprintf(&buffer[0], "%s_x", var->m_desc.c_str());
-                            util_asprintf(&buffer[1], "%s_y", var->m_desc.c_str());
-                            util_asprintf(&buffer[2], "%s_z", var->m_desc.c_str());
+                        util_asprintf(&buffer[0], "%s_x", var->m_desc.c_str());
+                        util_asprintf(&buffer[1], "%s_y", var->m_desc.c_str());
+                        util_asprintf(&buffer[2], "%s_z", var->m_desc.c_str());
 
-                            util_htset(parser.aliases, me[0]->m_name.c_str(), parser_find_global(parser, buffer[0]));
-                            util_htset(parser.aliases, me[1]->m_name.c_str(), parser_find_global(parser, buffer[1]));
-                            util_htset(parser.aliases, me[2]->m_name.c_str(), parser_find_global(parser, buffer[2]));
+                        util_htset(parser.aliases, me[0]->m_name.c_str(), parser_find_global(parser, buffer[0]));
+                        util_htset(parser.aliases, me[1]->m_name.c_str(), parser_find_global(parser, buffer[1]));
+                        util_htset(parser.aliases, me[2]->m_name.c_str(), parser_find_global(parser, buffer[2]));
 
-                            mem_d(buffer[0]);
-                            mem_d(buffer[1]);
-                            mem_d(buffer[2]);
-                        }
+                        mem_d(buffer[0]);
+                        mem_d(buffer[1]);
+                        mem_d(buffer[2]);
                     }
                 }
             } else {
@@ -5543,11 +5542,9 @@ static bool parse_variable(parser_t &parser, ast_block *localblock, bool nofield
                 if (!create_array_accessors(parser, var))
                     goto cleanup;
             }
-        }
-        else if (!localblock && !nofields &&
+        } else if (!localblock && !nofields &&
                  var->m_vtype == TYPE_FIELD &&
-                 var->m_next->m_vtype == TYPE_ARRAY)
-        {
+                 var->m_next->m_vtype == TYPE_ARRAY) {
             char name[1024];
             ast_expression *telem;
             ast_value      *tfield;
@@ -5597,8 +5594,7 @@ skipvar:
         if (localblock && OPTS_OPTION_U32(OPTION_STANDARD) == COMPILER_QCC) {
             if (parsewarning(parser, WARN_LOCAL_CONSTANTS,
                              "initializing expression turns variable `%s` into a constant in this standard",
-                             var->m_name) )
-            {
+                             var->m_name) ) {
                 break;
             }
         }
@@ -5621,9 +5617,6 @@ skipvar:
         if (parser.tok == '#') {
             ast_function *func   = nullptr;
             ast_value    *number = nullptr;
-            float         fractional;
-            float         integral;
-            int           builtin_num;
 
             if (localblock) {
                 parseerror(parser, "cannot declare builtins within functions");
@@ -5638,6 +5631,7 @@ skipvar:
                 break;
             }
 
+            int builtin_num;
             if (OPTS_FLAG(EXPRESSIONS_FOR_BUILTINS)) {
                 number = (ast_value*)parse_expression_leave(parser, true, false, false);
                 if (!number) {
@@ -5661,7 +5655,8 @@ skipvar:
                 }
                 ast_unref(number);
 
-                fractional = modff(builtin_num, &integral);
+                float integral;
+                float fractional = modff(builtin_num, &integral);
                 if (builtin_num < 0 || fractional != 0) {
                     parseerror(parser, "builtin number must be an integer greater than zero");
                     break;
@@ -5677,7 +5672,7 @@ skipvar:
             }
 
             if (var->m_hasvalue) {
-                (void)!parsewarning(parser, WARN_DOUBLE_DECLARATION,
+                (void) parsewarning(parser, WARN_DOUBLE_DECLARATION,
                                     "builtin `%s` has already been defined\n"
                                     " -> previous declaration here: %s:%i",
                                     var->m_name, var->m_context.file, (int)var->m_context.line);
@@ -5737,14 +5732,12 @@ skipvar:
             parser.labels.clear();
             return true;
         } else {
-            ast_expression *cexp;
-            ast_value      *cval;
-            bool            folded_const = false;
+            bool folded_const = false;
 
-            cexp = parse_expression_leave(parser, true, false, false);
+            auto cexp = parse_expression_leave(parser, true, false, false);
             if (!cexp)
                 break;
-            cval = ast_istype(cexp, ast_value) ? (ast_value*)cexp : nullptr;
+            auto cval = ast_istype(cexp, ast_value) ? reinterpret_cast<ast_value*>(cexp) : nullptr;
 
             /* deal with foldable constants: */
             if (localblock &&
@@ -5807,9 +5800,8 @@ skipvar:
                     }
                 }
             } else {
-                int cvq;
                 shunt sy;
-                cvq = var->m_cvq;
+                int cvq = var->m_cvq;
                 var->m_cvq = CV_NONE;
                 sy.out.push_back(syexp(var->m_context, var));
                 sy.out.push_back(syexp(cexp->m_context, cexp));
@@ -5885,33 +5877,30 @@ cleanup:
 
 static bool parser_global_statement(parser_t &parser)
 {
-    int        cvq       = CV_WRONG;
-    bool       noref     = false;
-    bool       is_static = false;
-    uint32_t   qflags    = 0;
     ast_value *istype    = nullptr;
-    char      *vstring   = nullptr;
-
-    if (parser.tok == TOKEN_IDENT)
-        istype = parser_find_typedef(parser, parser_tokval(parser), 0);
-
-    if (istype || parser.tok == TOKEN_TYPENAME || parser.tok == '.' || parser.tok == TOKEN_DOTS)
-    {
+    if ((parser.tok == TOKEN_IDENT && (istype = parser_find_typedef(parser, parser_tokval(parser), 0)) != nullptr)
+        || parser.tok == TOKEN_TYPENAME
+        || parser.tok == '.' || parser.tok == TOKEN_DOTS) {
         return parse_variable(parser, nullptr, false, CV_NONE, istype, false, false, 0, nullptr);
     }
-    else if (parse_qualifiers(parser, false, &cvq, &noref, &is_static, &qflags, &vstring))
-    {
+
+    int cvq = CV_WRONG;
+    bool noref = false;
+    bool is_static = false;
+    uint32_t qflags = 0;
+    char *vstring = nullptr;
+    if (parse_qualifiers(parser, false, &cvq, &noref, &is_static, &qflags, &vstring)) {
         if (cvq == CV_WRONG)
             return false;
         return parse_variable(parser, nullptr, false, cvq, nullptr, noref, is_static, qflags, vstring);
     }
-    else if (parser.tok == TOKEN_IDENT && !strcmp(parser_tokval(parser), "enum"))
-    {
+
+    if (parser.tok == TOKEN_IDENT && strcmp(parser_tokval(parser), "enum") == 0) {
         return parse_enum(parser);
     }
-    else if (parser.tok == TOKEN_KEYWORD)
-    {
-        if (!strcmp(parser_tokval(parser), "typedef")) {
+
+    if (parser.tok == TOKEN_KEYWORD) {
+        if (strcmp(parser_tokval(parser), "typedef") == 0) {
             if (!parser_next(parser)) {
                 parseerror(parser, "expected type definition after 'typedef'");
                 return false;
@@ -5921,23 +5910,21 @@ static bool parser_global_statement(parser_t &parser)
         parseerror(parser, "unrecognized keyword `%s`", parser_tokval(parser));
         return false;
     }
-    else if (parser.tok == '#')
-    {
+
+    if (parser.tok == '#') {
         return parse_pragma(parser);
     }
-    else if (parser.tok == '$')
-    {
+
+    if (parser.tok == '$') {
         if (!parser_next(parser)) {
             parseerror(parser, "parse error");
             return false;
         }
+        return true;
     }
-    else
-    {
-        parseerror(parser, "unexpected token: `%s`", parser.lex->tok.value);
-        return false;
-    }
-    return true;
+
+    parseerror(parser, "unexpected token: `%s`", parser.lex->tok.value);
+    return false;
 }
 
 static uint16_t progdefs_crc_sum(uint16_t old, const char *str)
@@ -6069,16 +6056,10 @@ parser_t::~parser_t()
 
 parser_t *parser_create()
 {
-    parser_t *parser;
-    size_t i;
-
-    parser = new parser_t;
-    if (!parser)
-        return nullptr;
-
-    for (i = 0; i < operator_count; ++i) {
+    auto parser = new parser_t;
+    for (size_t i = 0; i < operator_count; ++i) {
         if (operators[i].id == opid1('=')) {
-            parser->assign_op = operators+i;
+            parser->assign_op = &operators[i];
             break;
         }
     }
@@ -6091,35 +6072,31 @@ parser_t *parser_create()
     return parser;
 }
 
+/** parser entrypoint */
 static bool parser_compile(parser_t &parser)
 {
     /* initial lexer/parser state */
     parser.lex->flags.noops = true;
 
-    if (parser_next(parser))
-    {
-        while (parser.tok != TOKEN_EOF && parser.tok < TOKEN_ERROR)
-        {
-            if (!parser_global_statement(parser)) {
-                if (parser.tok == TOKEN_EOF)
-                    parseerror(parser, "unexpected end of file");
-                else if (compile_errors)
-                    parseerror(parser, "there have been errors, bailing out");
-                lex_close(parser.lex);
-                parser.lex = nullptr;
-                return false;
-            }
-        }
-    } else {
+    if (!parser_next(parser)) {
         parseerror(parser, "parse error");
-        lex_close(parser.lex);
-        parser.lex = nullptr;
-        return false;
+        compile_errors = true;
+        goto cleanup;
+    }
+    while (parser.tok != TOKEN_EOF && parser.tok < TOKEN_ERROR) {
+        if (parser_global_statement(parser)) continue;
+        if (parser.tok == TOKEN_EOF) {
+            parseerror(parser, "unexpected end of file");
+        } else if (compile_errors) {
+            parseerror(parser, "there have been errors, bailing out");
+        }
+        compile_errors = true;
+        goto cleanup;
     }
 
+cleanup:
     lex_close(parser.lex);
     parser.lex = nullptr;
-
     return !compile_errors;
 }
 
