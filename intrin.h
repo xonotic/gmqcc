@@ -19,8 +19,7 @@ struct intrin_func_t {
 };
 
 struct intrin {
-    intrin() = default;
-    intrin(parser_t *parser);
+    explicit intrin(parser_t &parser);
 
     ast_expression *debug_typestring();
     ast_expression *do_fold(ast_value *val, ast_expression **exprs);
@@ -64,7 +63,7 @@ protected:
     void error(const char *fmt, ...);
 
 private:
-    parser_t *m_parser;
+    parser_t &m_parser;
     fold *m_fold;
     std::vector<intrin_func_t> m_intrinsics;
     std::vector<ast_expression*> m_generated;

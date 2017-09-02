@@ -196,10 +196,10 @@ bool GMQCC_WARN ir_block_create_goto(ir_block*, lex_ctx_t, ir_block *to);
 
 /* function */
 struct ir_function {
-    ir_function(ir_builder *owner, qc_type returntype);
+    ir_function(ir_builder &owner, qc_type returntype);
     ~ir_function();
 
-    ir_builder *m_owner;
+    ir_builder &m_owner;
 
     std::string      m_name;
     qc_type          m_outtype;
@@ -252,7 +252,7 @@ ir_block*       ir_function_create_block(lex_ctx_t ctx, ir_function*, const char
 #define IR_MAX_VINSTR_TEMPS 1
 
 struct ir_builder {
-    ir_builder(const std::string& modulename);
+    explicit ir_builder(const std::string& modulename);
     ~ir_builder();
 
     ir_function *createFunction(const std::string &name, qc_type outtype);

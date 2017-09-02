@@ -313,7 +313,7 @@ ir_function* ir_builder::createFunction(const std::string& name, qc_type outtype
     if (fn)
         return nullptr;
 
-    fn = new ir_function(this, outtype);
+    fn = new ir_function(*this, outtype);
     fn->m_name = name;
     m_functions.emplace_back(fn);
     util_htset(m_htfunctions, name.c_str(), fn);
@@ -380,7 +380,7 @@ static void ir_function_enumerate(ir_function*);
 static bool ir_function_calculate_liferanges(ir_function*);
 static bool ir_function_allocate_locals(ir_function*);
 
-ir_function::ir_function(ir_builder* owner_, qc_type outtype_)
+ir_function::ir_function(ir_builder& owner_, qc_type outtype_)
 : m_owner(owner_),
   m_name("<@unnamed>"),
   m_outtype(outtype_)
@@ -411,8 +411,8 @@ ir_block* ir_function_create_block(lex_ctx_t ctx, ir_function *self, const char 
     bn->m_context = ctx;
     self->m_blocks.emplace_back(bn);
 
-    if ((self->m_flags & IR_FLAG_BLOCK_COVERAGE) && self->m_owner->m_coverage_func)
-        (void)ir_block_create_call(bn, ctx, nullptr, self->m_owner->m_coverage_func, false);
+    if ((self->m_flags & IR_FLAG_BLOCK_COVERAGE) && self->m_owner.m_coverage_func)
+        (void)ir_block_create_call(bn, ctx, nullptr, self->m_owner.m_coverage_func, false);
 
     return bn;
 }
@@ -1643,7 +1643,7 @@ ir_value* ir_block_create_unary(ir_block *self, lex_ctx_t ctx,
         case VINSTR_NEG_F:
             return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_F, nullptr, operand, ot);
         case VINSTR_NEG_V:
-            return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_V, self->m_owner->m_owner->m_nil, operand, TYPE_VECTOR);
+            return ir_block_create_general_instr(self, ctx, label, INSTR_SUB_V, self->m_owner->m_owner.m_nil, operand, TYPE_VECTOR);
 
         default:
             ot = operand->m_vtype;
@@ -1975,16 +1975,16 @@ bool ir_function_allocate_locals(ir_function *self)
                 if (param < 8)
                     v->setCodeAddress(OFS_PARM0 + 3*param);
                 else {
-                    size_t nprotos = self->m_owner->m_extparam_protos.size();
+                    size_t nprotos = self->m_owner.m_extparam_protos.size();
                     ir_value *ep;
                     param -= 8;
                     if (nprotos > param)
-                        ep = self->m_owner->m_extparam_protos[param].get();
+                        ep = self->m_owner.m_extparam_protos[param].get();
                     else
                     {
-                        ep = self->m_owner->generateExtparamProto();
+                        ep = self->m_owner.generateExtparamProto();
                         while (++nprotos <= param)
-                            ep = self->m_owner->generateExtparamProto();
+                            ep = self->m_owner.generateExtparamProto();
                     }
                     ir_instr_op(v->m_writes[0], 0, ep, true);
                     call->m_params[param+8] = ep;
@@ -2519,11 +2519,11 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             stmt.opcode = INSTR_BITAND;
             stmt.o1.s1 = instr->_m_ops[1]->codeAddress();
             stmt.o2.s1 = instr->_m_ops[2]->codeAddress();
-            stmt.o3.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress();
+            stmt.o3.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress();
             code_push_statement(code, &stmt, instr->m_context);
             stmt.opcode = INSTR_SUB_F;
             stmt.o1.s1 = instr->_m_ops[0]->codeAddress();
-            stmt.o2.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress();
+            stmt.o2.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress();
             stmt.o3.s1 = instr->_m_ops[0]->codeAddress();
             code_push_statement(code, &stmt, instr->m_context);
 
@@ -2579,12 +2579,12 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 stmt.opcode = INSTR_BITAND;
                 stmt.o1.s1 = instr->_m_ops[1]->codeAddress() + j;
                 stmt.o2.s1 = instr->_m_ops[2]->codeAddress() + j;
-                stmt.o3.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress() + j;
+                stmt.o3.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress() + j;
                 code_push_statement(code, &stmt, instr->m_context);
             }
             stmt.opcode = INSTR_SUB_V;
             stmt.o1.s1 = instr->_m_ops[0]->codeAddress();
-            stmt.o2.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress();
+            stmt.o2.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress();
             stmt.o3.s1 = instr->_m_ops[0]->codeAddress();
             code_push_statement(code, &stmt, instr->m_context);
 
@@ -2636,12 +2636,12 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 stmt.opcode = INSTR_BITAND;
                 stmt.o1.s1 = instr->_m_ops[1]->codeAddress() + j;
                 stmt.o2.s1 = instr->_m_ops[2]->codeAddress();
-                stmt.o3.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress() + j;
+                stmt.o3.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress() + j;
                 code_push_statement(code, &stmt, instr->m_context);
             }
             stmt.opcode = INSTR_SUB_V;
             stmt.o1.s1 = instr->_m_ops[0]->codeAddress();
-            stmt.o2.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress();
+            stmt.o2.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress();
             stmt.o3.s1 = instr->_m_ops[0]->codeAddress();
             code_push_statement(code, &stmt, instr->m_context);
 
@@ -2658,12 +2658,12 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
                 code_push_statement(code, &stmt, instr->m_context);
                 stmt.o1.s1 = instr->_m_ops[1]->codeAddress() + (j + 2) % 3;
                 stmt.o2.s1 = instr->_m_ops[2]->codeAddress() + (j + 1) % 3;
-                stmt.o3.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress() + j;
+                stmt.o3.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress() + j;
                 code_push_statement(code, &stmt, instr->m_context);
             }
             stmt.opcode = INSTR_SUB_V;
             stmt.o1.s1 = instr->_m_ops[0]->codeAddress();
-            stmt.o2.s1 = func->m_owner->m_vinstr_temp[0]->codeAddress();
+            stmt.o2.s1 = func->m_owner.m_vinstr_temp[0]->codeAddress();
             stmt.o3.s1 = instr->_m_ops[0]->codeAddress();
             code_push_statement(code, &stmt, instr->m_context);
 
@@ -2803,17 +2803,17 @@ static bool gen_blocks_recursive(code_t *code, ir_function *func, ir_block *bloc
             first = instr->m_params.size();
             for (; p < first; ++p)
             {
-                ir_builder *ir = func->m_owner;
+                ir_builder &ir = func->m_owner;
                 ir_value *param = instr->m_params[p];
                 ir_value *targetparam;
 
                 if (param->m_callparam)
                     continue;
 
-                if (p-8 >= ir->m_extparams.size())
-                    ir->generateExtparam();
+                if (p-8 >= ir.m_extparams.size())
+                    ir.generateExtparam();
 
-                targetparam = ir->m_extparams[p-8];
+                targetparam = ir.m_extparams[p-8];
 
                 stmt.opcode = INSTR_STORE_F;
                 stmt.o3.u1 = 0;
@@ -3065,7 +3065,7 @@ void ir_builder::generateExtparam()
 
 static bool gen_function_extparam_copy(code_t *code, ir_function *self)
 {
-    ir_builder *ir = self->m_owner;
+    ir_builder &ir = self->m_owner;
 
     size_t numparams = self->m_params.size();
     if (!numparams)
@@ -3076,10 +3076,10 @@ static bool gen_function_extparam_copy(code_t *code, ir_function *self)
     stmt.o3.s1 = 0;
     for (size_t i = 8; i < numparams; ++i) {
         size_t ext = i - 8;
-        if (ext >= ir->m_extparams.size())
-            ir->generateExtparam();
+        if (ext >= ir.m_extparams.size())
+            ir.generateExtparam();
 
-        ir_value *ep = ir->m_extparams[ext];
+        ir_value *ep = ir.m_extparams[ext];
 
         stmt.opcode = type_store_instr[self->m_locals[i]->m_vtype];
         if (self->m_locals[i]->m_vtype == TYPE_FIELD &&
@@ -3099,7 +3099,7 @@ static bool gen_function_varargs_copy(code_t *code, ir_function *self)
 {
     size_t i, ext, numparams, maxparams;
 
-    ir_builder *ir = self->m_owner;
+    ir_builder &ir = self->m_owner;
     ir_value   *ep;
     prog_section_statement_t stmt;
 
@@ -3118,10 +3118,10 @@ static bool gen_function_varargs_copy(code_t *code, ir_function *self)
             continue;
         }
         ext = i - 8;
-        while (ext >= ir->m_extparams.size())
-            ir->generateExtparam();
+        while (ext >= ir.m_extparams.size())
+            ir.generateExtparam();
 
-        ep = ir->m_extparams[ext];
+        ep = ir.m_extparams[ext];
 
         stmt.o1.u1 = ep->codeAddress();
         stmt.o2.u1 = self->m_locals[i].get()->codeAddress();

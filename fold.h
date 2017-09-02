@@ -15,11 +15,10 @@ struct ast_value;
 struct parser_t;
 
 struct fold {
-    fold();
-    fold(parser_t *parser);
+    explicit fold(parser_t &parser);
     ~fold();
 
-    bool generate(ir_builder *ir);
+    bool generate(ir_builder &ir);
     ast_expression *op(const oper_info *info, ast_expression **opexprs);
     ast_expression *intrinsic(const char *intrinsic, ast_expression **arg);
 
@@ -100,7 +99,7 @@ private:
     std::vector<ast_value*> m_imm_string;
     hash_table_t *m_imm_string_untranslate; /* map<string, ast_value*> */
     hash_table_t *m_imm_string_dotranslate; /* map<string, ast_value*> */
-    parser_t *m_parser;
+    parser_t &m_parser;
     bool m_initialized;
 };
 

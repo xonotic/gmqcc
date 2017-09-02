@@ -738,9 +738,9 @@ qcint_t             prog_tempstring(qc_program_t *prog, const char *_str);
 /* parser.c */
 struct parser_t;
 parser_t *parser_create(void);
-bool parser_compile_file(parser_t *parser, const char *);
-bool parser_compile_string(parser_t *parser, const char *, const char *, size_t);
-bool parser_finish(parser_t *parser, const char *);
+bool parser_compile_file(parser_t &parser, const char *);
+bool parser_compile_string(parser_t &parser, const char *, const char *, size_t);
+bool parser_finish(parser_t &parser, const char *);
 
 /* ftepp.c */
 struct ftepp_t;

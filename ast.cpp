@@ -1004,7 +1004,7 @@ bool ast_value::codegen(ast_function *func, bool lvalue, ir_value **out)
     (void)func;
     (void)lvalue;
     if (m_vtype == TYPE_NIL) {
-        *out = func->m_ir_func->m_owner->m_nil;
+        *out = func->m_ir_func->m_owner.m_nil;
         return true;
     }
     // NOTE: This is the codegen for a variable used in an expression.
@@ -1094,7 +1094,7 @@ bool ast_value::checkArray(const ast_value &array) const
     return true;
 }
 
-bool ast_value::generateGlobal(ir_builder *ir, bool isfield)
+bool ast_value::generateGlobal(ir_builder &ir, bool isfield)
 {
     if (m_vtype == TYPE_NIL) {
         compile_error(m_context, "internal error: trying to generate a variable of TYPE_NIL");
@@ -1115,7 +1115,7 @@ bool ast_value::generateGlobal(ir_builder *ir, bool isfield)
     } else {
         // Arrays don't do this since there's no "array" value which spans across the
         // whole thing.
-        v = ir->createGlobal(m_name, m_vtype);
+        v = ir.createGlobal(m_name, m_vtype);
         if (!v) {
             compile_error(m_context, "ir_builder::createGlobal failed on `%s`", m_name);
             return false;
@@ -1182,9 +1182,9 @@ bool ast_value::generateGlobal(ir_builder *ir, bool isfield)
     return true;
 }
 
-bool ast_value::generateGlobalFunction(ir_builder *ir)
+bool ast_value::generateGlobalFunction(ir_builder &ir)
 {
-    ir_function *func = ir->createFunction(m_name, m_next->m_vtype);
+    ir_function *func = ir.createFunction(m_name, m_next->m_vtype);
     if (!func)
         return false;
     func->m_context = m_context;
@@ -1202,7 +1202,7 @@ bool ast_value::generateGlobalFunction(ir_builder *ir)
     return true;
 }
 
-bool ast_value::generateGlobalField(ir_builder *ir)
+bool ast_value::generateGlobalField(ir_builder &ir)
 {
     ast_expression *fieldtype = m_next;
 
@@ -1224,7 +1224,7 @@ bool ast_value::generateGlobalField(ir_builder *ir)
         ast_expression *elemtype = array->m_next;
         qc_type vtype = elemtype->m_vtype;
 
-        ir_value *v = ir->createField(m_name, vtype);
+        ir_value *v = ir.createField(m_name, vtype);
         if (!v) {
             compile_error(m_context, "ir_builder::createGlobal failed on `%s`", m_name);
             return false;
@@ -1249,7 +1249,7 @@ bool ast_value::generateGlobalField(ir_builder *ir)
         array->m_ir_values[0] = v;
         for (size_t ai = 1; ai < array->m_count; ++ai) {
             util_snprintf(name.get() + namelen, 16, "[%u]", (unsigned int)ai);
-            array->m_ir_values[ai] = ir->createField(name.get(), vtype);
+            array->m_ir_values[ai] = ir.createField(name.get(), vtype);
             if (!array->m_ir_values[ai]) {
                 compile_error(m_context, "ir_builder::createGlobal failed on `%s`", name.get());
                 return false;
@@ -1265,7 +1265,7 @@ bool ast_value::generateGlobalField(ir_builder *ir)
     }
     else
     {
-        ir_value *v = ir->createField(m_name, m_next->m_vtype);
+        ir_value *v = ir.createField(m_name, m_next->m_vtype);
         if (!v)
             return false;
         v->m_context = m_context;
@@ -1280,7 +1280,7 @@ bool ast_value::generateGlobalField(ir_builder *ir)
     return true;
 }
 
-ir_value *ast_value::prepareGlobalArray(ir_builder *ir)
+ir_value *ast_value::prepareGlobalArray(ir_builder &ir)
 {
     ast_expression *elemtype = m_next;
     qc_type vtype = elemtype->m_vtype;
@@ -1294,7 +1294,7 @@ ir_value *ast_value::prepareGlobalArray(ir_builder *ir)
     if (!checkArray(*this))
         return nullptr;
 
-    ir_value *v = ir->createGlobal(m_name, vtype);
+    ir_value *v = ir.createGlobal(m_name, vtype);
     if (!v) {
         compile_error(m_context, "ir_builder::createGlobal failed `%s`", m_name);
         return nullptr;
@@ -1318,7 +1318,7 @@ ir_value *ast_value::prepareGlobalArray(ir_builder *ir)
     m_ir_values[0] = v;
     for (size_t ai = 1; ai < m_count; ++ai) {
         util_snprintf(name.get() + namelen, 16, "[%u]", (unsigned int)ai);
-        m_ir_values[ai] = ir->createGlobal(name.get(), vtype);
+        m_ir_values[ai] = ir.createGlobal(name.get(), vtype);
         if (!m_ir_values[ai]) {
             compile_error(m_context, "ir_builder::createGlobal failed `%s`", name.get());
             return nullptr;
@@ -1447,7 +1447,7 @@ error: /* clean up */
     return false;
 }
 
-bool ast_value::generateAccessors(ir_builder *ir)
+bool ast_value::generateAccessors(ir_builder &ir)
 {
     size_t i;
     bool warn = OPTS_WARN(WARN_USED_UNINITIALIZED);
@@ -1495,7 +1495,7 @@ bool ast_value::generateAccessors(ir_builder *ir)
     return true;
 }
 
-bool ast_function::generateFunction(ir_builder *ir)
+bool ast_function::generateFunction(ir_builder &ir)
 {
     (void)ir;
 
@@ -1559,7 +1559,7 @@ bool ast_function::generateFunction(ir_builder *ir)
             return false;
         sub = ir_block_create_binop(m_curblock, m_context,
                                     makeLabel("va_count"), INSTR_SUB_F,
-                                    ir->get_va_count(), fixed);
+                                    ir.get_va_count(), fixed);
         if (!sub)
             return false;
         if (!ir_block_create_store_op(m_curblock, m_context, INSTR_STORE_F,
@@ -3075,11 +3075,11 @@ bool ast_call::codegen(ast_function *func, bool lvalue, ir_value **out)
     /* varargs counter */
     if (m_va_count) {
         ir_value   *va_count;
-        ir_builder *builder = func->m_curblock->m_owner->m_owner;
+        ir_builder &builder = func->m_curblock->m_owner->m_owner;
         if (!m_va_count->codegen(func, false, &va_count))
             return false;
         if (!ir_block_create_store_op(func->m_curblock, m_context, INSTR_STORE_F,
-                                      builder->get_va_count(), va_count))
+                                      builder.get_va_count(), va_count))
         {
             return false;
         }

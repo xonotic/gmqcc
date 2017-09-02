@@ -208,9 +208,9 @@ struct ast_value : ast_expression
 
     void addParam(ast_value*);
 
-    bool generateGlobal(ir_builder*, bool isfield);
+    bool generateGlobal(ir_builder&, bool isfield);
     bool generateLocal(ir_function*, bool param);
-    bool generateAccessors(ir_builder*);
+    bool generateAccessors(ir_builder&);
 
     std::string m_name;
     std::string m_desc;
@@ -240,9 +240,9 @@ struct ast_value : ast_expression
     bool m_intrinsic = false; /* true if associated with intrinsic */
 
 private:
-    bool generateGlobalFunction(ir_builder*);
-    bool generateGlobalField(ir_builder*);
-    ir_value *prepareGlobalArray(ir_builder*);
+    bool generateGlobalFunction(ir_builder&);
+    bool generateGlobalField(ir_builder&);
+    ir_value *prepareGlobalArray(ir_builder&);
     bool setGlobalArray();
     bool checkArray(const ast_value &array) const;
 };
@@ -715,7 +715,7 @@ struct ast_function : ast_node
     ~ast_function();
 
     const char* makeLabel(const char *prefix);
-    virtual bool generateFunction(ir_builder*);
+    virtual bool generateFunction(ir_builder&);
 
     ast_value  *m_function_type = nullptr;
     std::string m_name;

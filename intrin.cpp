@@ -28,8 +28,8 @@ ast_function *intrin::value(ast_value **out, const char *name, qc_type vtype) {
 }
 
 void intrin::reg(ast_value *const value, ast_function *const func) {
-    m_parser->functions.push_back(func);
-    m_parser->globals.push_back(value);
+    m_parser.functions.push_back(func);
+    m_parser.globals.push_back(value);
 }
 
 #define QC_POW_EPSILON 0.00001f
@@ -1958,9 +1958,9 @@ ast_expression *intrin::debug_typestring() {
     return (ast_expression*)0x1;
 }
 
-intrin::intrin(parser_t *parser)
+intrin::intrin(parser_t &parser)
     : m_parser(parser)
-    , m_fold(&parser->m_fold)
+    , m_fold(&parser.m_fold)
 {
     static const intrin_func_t intrinsics[] = {
         {&intrin::isfinite_,        "__builtin_isfinite",         "isfinite", 1},
@@ -2026,7 +2026,7 @@ ast_expression *intrin::func_self(const char *name, const char *from) {
     ast_expression *find;
     /* try current first */
     if ((find = parser_find_global(m_parser, name)) && ((ast_value*)find)->m_vtype == TYPE_FUNCTION)
-        for (auto &it : m_parser->functions)
+        for (auto &it : m_parser.functions)
             if (reinterpret_cast<ast_value*>(find)->m_name.length() && it->m_name == reinterpret_cast<ast_value*>(find)->m_name && it->m_builtin < 0)
                 return find;
     /* try name second */

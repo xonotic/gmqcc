@@ -9,7 +9,7 @@
 
 struct parser_t;
 
-#define parser_ctx(p) ((p)->lex->tok.ctx)
+#define parser_ctx(p) ((p).lex->tok.ctx)
 
 struct parser_t {
     parser_t();
@@ -79,6 +79,6 @@ struct parser_t {
 
 /* parser.c */
 char           *parser_strdup     (const char *str);
-ast_expression *parser_find_global(parser_t *parser, const char *name);
+ast_expression *parser_find_global(parser_t &parser, const char *name);
 
 #endif

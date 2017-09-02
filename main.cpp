@@ -698,7 +698,7 @@ int main(int argc, char **argv) {
                     }
                     data = ftepp_get(ftepp);
                     if (vec_size(data)) {
-                        if (!parser_compile_string(parser, items[itr].filename, data, vec_size(data))) {
+                        if (!parser_compile_string(*parser, items[itr].filename, data, vec_size(data))) {
                             retval = 1;
                             goto cleanup;
                         }
@@ -706,7 +706,7 @@ int main(int argc, char **argv) {
                     ftepp_flush(ftepp);
                 }
                 else {
-                    if (!parser_compile_file(parser, items[itr].filename)) {
+                    if (!parser_compile_file(*parser, items[itr].filename)) {
                         retval = 1;
                         goto cleanup;
                     }
@@ -722,7 +722,7 @@ int main(int argc, char **argv) {
         ftepp_finish(ftepp);
         ftepp = nullptr;
         if (!OPTS_OPTION_BOOL(OPTION_PP_ONLY)) {
-            if (!parser_finish(parser, OPTS_OPTION_STR(OPTION_OUTPUT))) {
+            if (!parser_finish(*parser, OPTS_OPTION_STR(OPTION_OUTPUT))) {
                 retval = 1;
                 goto cleanup;
             }

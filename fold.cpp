@@ -871,7 +871,7 @@ const char *fold::immvalue_string(ast_value *value) {
 
 lex_ctx_t fold::ctx() {
     lex_ctx_t ctx;
-    if (m_parser->lex)
+    if (m_parser.lex)
         return parser_ctx(m_parser);
     memset(&ctx, 0, sizeof(ctx));
     return ctx;
@@ -907,12 +907,7 @@ bool fold::immediate_true(ast_value *v) {
 
 #define fold_can_2(X, Y) (fold_can_1(X) && fold_can_1(Y))
 
-fold::fold()
-    : m_parser(nullptr)
-{
-}
-
-fold::fold(parser_t *parser)
+fold::fold(parser_t &parser)
     : m_parser(parser)
 {
     m_imm_string_untranslate = util_htnew(FOLD_STRING_UNTRANSLATE_HTSIZE);
@@ -927,7 +922,7 @@ fold::fold(parser_t *parser)
     constgen_vector(vec3_create(-1.0f, -1.0f, -1.0f));
 }
 
-bool fold::generate(ir_builder *ir) {
+bool fold::generate(ir_builder &ir) {
     // generate globals for immediate folded values
     ast_value *cur;
     for (auto &it : m_imm_float)
@@ -939,7 +934,6 @@ bool fold::generate(ir_builder *ir) {
     return true;
 err:
     con_out("failed to generate global %s\n", cur->m_name.c_str());
-    delete ir;
     return false;
 }
 
@@ -996,7 +990,7 @@ ast_expression *fold::constgen_string(const char *str, bool translate) {
 
     if (translate) {
         char name[32];
-        util_snprintf(name, sizeof(name), "dotranslate_%zu", m_parser->translated++);
+        util_snprintf(name, sizeof(name), "dotranslate_%zu", m_parser.translated++);
         out = new ast_value(ctx(), name, TYPE_STRING);
         out->m_flags |= AST_FLAG_INCLUDE_DEF; /* def needs to be included for translatables */
     } else {
