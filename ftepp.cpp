@@ -14,7 +14,7 @@ struct ppcondition {
 };
 
 struct pptoken {
-    int token;
+    Token token;
     char *value;
     /* a copy from the lexer */
     union {
@@ -37,7 +37,7 @@ struct ppmacro {
 
 struct ftepp_t {
     lex_file *lex;
-    int token;
+    Token token;
     unsigned int errors;
     bool output_on;
     ppcondition *conditions;
@@ -322,7 +322,7 @@ static GMQCC_INLINE void ftepp_macro_delete(ftepp_t *ftepp, const char *name)
     util_htrm(ftepp->macros, name, (void (*)(void*))&ppmacro_delete);
 }
 
-static GMQCC_INLINE int ftepp_next(ftepp_t *ftepp)
+static GMQCC_INLINE Token ftepp_next(ftepp_t *ftepp)
 {
     return (ftepp->token = lex_do(ftepp->lex));
 }
@@ -330,10 +330,10 @@ static GMQCC_INLINE int ftepp_next(ftepp_t *ftepp)
 /* Important: this does not skip newlines! */
 static bool ftepp_skipspace(ftepp_t *ftepp)
 {
-    if (ftepp->token != TOKEN_WHITE)
+    if (ftepp->token != Token::WHITE)
         return true;
-    while (ftepp_next(ftepp) == TOKEN_WHITE) {}
-    if (ftepp->token >= TOKEN_EOF) {
+    while (ftepp_next(ftepp) == Token::WHITE) {}
+    if (ftepp->token >= Token::END) {
         ftepp_error(ftepp, "unexpected end of preprocessor directive");
         return false;
     }
@@ -343,12 +343,12 @@ static bool ftepp_skipspace(ftepp_t *ftepp)
 /* this one skips EOLs as well */
 static bool ftepp_skipallwhite(ftepp_t *ftepp)
 {
-    if (ftepp->token != TOKEN_WHITE && ftepp->token != TOKEN_EOL)
+    if (ftepp->token != Token::WHITE && ftepp->token != Token::EOL)
         return true;
     do {
         ftepp_next(ftepp);
-    } while (ftepp->token == TOKEN_WHITE || ftepp->token == TOKEN_EOL);
-    if (ftepp->token >= TOKEN_EOF) {
+    } while (ftepp->token == Token::WHITE || ftepp->token == Token::EOL);
+    if (ftepp->token >= Token::END) {
         ftepp_error(ftepp, "unexpected end of preprocessor directive");
         return false;
     }
@@ -364,15 +364,15 @@ static bool ftepp_define_params(ftepp_t *ftepp, ppmacro *macro)
         ftepp_next(ftepp);
         if (!ftepp_skipspace(ftepp))
             return false;
-        if (ftepp->token == ')')
+        if (ftepp->token == Token::PAREN_CLOSE)
             break;
         switch (ftepp->token) {
-            case TOKEN_IDENT:
-            case TOKEN_TYPENAME:
-            case TOKEN_KEYWORD:
+            case Token::IDENT:
+            case Token::TYPENAME:
+            case Token::KEYWORD:
                 vec_push(macro->params, util_strdup(ftepp_tokval(ftepp)));
                 break;
-            case TOKEN_DOTS:
+            case Token::DOTS:
                 macro->variadic = true;
                 break;
             default:
@@ -382,13 +382,13 @@ static bool ftepp_define_params(ftepp_t *ftepp, ppmacro *macro)
         ftepp_next(ftepp);
         if (!ftepp_skipspace(ftepp))
             return false;
-        if (macro->variadic && ftepp->token != ')') {
+        if (macro->variadic && ftepp->token != Token::PAREN_CLOSE) {
             ftepp_error(ftepp, "cannot have parameters after the variadic parameters");
             return false;
         }
-    } while (ftepp->token == ',');
+    } while (ftepp->token == Token::COMMA);
 
-    if (ftepp->token != ')') {
+    if (ftepp->token != Token::PAREN_CLOSE) {
         ftepp_error(ftepp, "expected closing paren after macro parameter list");
         return false;
     }
@@ -400,25 +400,25 @@ static bool ftepp_define_params(ftepp_t *ftepp, ppmacro *macro)
 static bool ftepp_define_body(ftepp_t *ftepp, ppmacro *macro)
 {
     pptoken *ptok;
-    while (ftepp->token != TOKEN_EOL && ftepp->token < TOKEN_EOF) {
+    while (ftepp->token != Token::EOL && ftepp->token < Token::END) {
         bool   subscript = false;
         size_t index     = 0;
         if (macro->variadic && !strcmp(ftepp_tokval(ftepp), "__VA_ARGS__")) {
-            subscript = !!(ftepp_next(ftepp) == '#');
+            subscript = !!(ftepp_next(ftepp) == Token::HASH);
 
-            if (subscript && ftepp_next(ftepp) != '#') {
+            if (subscript && ftepp_next(ftepp) != Token::HASH) {
                 ftepp_error(ftepp, "expected `##` in __VA_ARGS__ for subscripting");
                 return false;
             } else if (subscript) {
-                if (ftepp_next(ftepp) == '[') {
-                    if (ftepp_next(ftepp) != TOKEN_INTCONST) {
+                if (ftepp_next(ftepp) == Token::BRACKET_OPEN) {
+                    if (ftepp_next(ftepp) != Token::INTCONST) {
                         ftepp_error(ftepp, "expected index for __VA_ARGS__ subscript");
                         return false;
                     }
 
                     index = (int)strtol(ftepp_tokval(ftepp), nullptr, 10);
 
-                    if (ftepp_next(ftepp) != ']') {
+                    if (ftepp_next(ftepp) != Token::BRACKET_CLOSE) {
                         ftepp_error(ftepp, "expected `]` in __VA_ARGS__ subscript");
                         return false;
                     }
@@ -427,7 +427,7 @@ static bool ftepp_define_body(ftepp_t *ftepp, ppmacro *macro)
                      * mark it as an array to be handled later as such and not
                      * as traditional __VA_ARGS__
                      */
-                    ftepp->token = TOKEN_VA_ARGS_ARRAY;
+                    ftepp->token = Token::VA_ARGS_ARRAY;
                     ptok = pptoken_make(ftepp);
                     ptok->constval.i = index;
                     vec_push(macro->output, ptok);
@@ -437,15 +437,15 @@ static bool ftepp_define_body(ftepp_t *ftepp, ppmacro *macro)
                     return false;
                 }
             } else {
-                int old = ftepp->token;
-                ftepp->token = TOKEN_VA_ARGS;
+                auto old = ftepp->token;
+                ftepp->token = Token::VA_ARGS;
                 ptok = pptoken_make(ftepp);
                 vec_push(macro->output, ptok);
                 ftepp->token = old;
             }
         }
         else if (macro->variadic && !strcmp(ftepp_tokval(ftepp), "__VA_COUNT__")) {
-            ftepp->token = TOKEN_VA_COUNT;
+            ftepp->token = Token::VA_COUNT;
             ptok         = pptoken_make(ftepp);
             vec_push(macro->output, ptok);
             ftepp_next(ftepp);
@@ -456,7 +456,7 @@ static bool ftepp_define_body(ftepp_t *ftepp, ppmacro *macro)
         }
     }
     /* recursive expansion can cause EOFs here */
-    if (ftepp->token != TOKEN_EOL && ftepp->token != TOKEN_EOF) {
+    if (ftepp->token != Token::EOL && ftepp->token != Token::END) {
         ftepp_error(ftepp, "unexpected junk after macro or unexpected end of file");
         return false;
     }
@@ -492,9 +492,9 @@ static bool ftepp_define(ftepp_t *ftepp)
         return false;
 
     switch (ftepp->token) {
-        case TOKEN_IDENT:
-        case TOKEN_TYPENAME:
-        case TOKEN_KEYWORD:
+        case Token::IDENT:
+        case Token::TYPENAME:
+        case Token::KEYWORD:
             if (OPTS_FLAG(FTEPP_MATHDEFS)) {
                 for (i = 0; i < GMQCC_ARRAY_COUNT(ftepp_math_constants); i++) {
                     if (!strcmp(ftepp_math_constants[i][0], ftepp_tokval(ftepp))) {
@@ -528,7 +528,7 @@ static bool ftepp_define(ftepp_t *ftepp)
 
     (void)ftepp_next(ftepp);
 
-    if (ftepp->token == '(') {
+    if (ftepp->token == Token::PAREN_OPEN) {
         macro->has_params = true;
         if (!ftepp_define_params(ftepp, macro)) {
             ppmacro_delete(macro);
@@ -588,34 +588,34 @@ static bool ftepp_macro_call_params(ftepp_t *ftepp, macroparam **out_params)
 
     if (!ftepp_skipallwhite(ftepp))
         return false;
-    while (ftepp->token != ')') {
+    while (ftepp->token != Token::PAREN_CLOSE) {
         mp.tokens = nullptr;
         if (!ftepp_skipallwhite(ftepp))
             return false;
-        while (parens || ftepp->token != ',') {
-            if (ftepp->token == '(')
+        while (parens || ftepp->token != Token::COMMA) {
+            if (ftepp->token == Token::PAREN_OPEN)
                 ++parens;
-            else if (ftepp->token == ')') {
+            else if (ftepp->token == Token::PAREN_CLOSE) {
                 if (!parens)
                     break;
                 --parens;
             }
             ptok = pptoken_make(ftepp);
             vec_push(mp.tokens, ptok);
-            if (ftepp_next(ftepp) >= TOKEN_EOF) {
+            if (ftepp_next(ftepp) >= Token::END) {
                 ftepp_error(ftepp, "unexpected end of file in macro call");
                 goto on_error;
             }
         }
         vec_push(params, mp);
         mp.tokens = nullptr;
-        if (ftepp->token == ')')
+        if (ftepp->token == Token::PAREN_CLOSE)
             break;
-        if (ftepp->token != ',') {
+        if (ftepp->token != Token::COMMA) {
             ftepp_error(ftepp, "expected closing paren or comma in macro call");
             goto on_error;
         }
-        if (ftepp_next(ftepp) >= TOKEN_EOF) {
+        if (ftepp_next(ftepp) >= Token::END) {
             ftepp_error(ftepp, "unexpected end of file in macro call");
             goto on_error;
         }
@@ -650,7 +650,7 @@ static void ftepp_stringify_token(ftepp_t *ftepp, pptoken *token)
     const char *ch;
     chs[1] = 0;
     switch (token->token) {
-        case TOKEN_STRINGCONST:
+        case Token::STRINGCONST:
             ch = token->value;
             while (*ch) {
                 /* in preprocessor mode strings already are string,
@@ -668,10 +668,10 @@ static void ftepp_stringify_token(ftepp_t *ftepp, pptoken *token)
                 ++ch;
             }
             break;
-        /*case TOKEN_WHITE:
+        /*case Token::WHITE:
             ftepp_out(ftepp, " ", false);
             break;*/
-        case TOKEN_EOL:
+        case Token::EOL:
             ftepp_out(ftepp, "\\n", false);
             break;
         default:
@@ -706,7 +706,7 @@ static void ftepp_param_out(ftepp_t *ftepp, macroparam *param)
     pptoken *out;
     for (i = 0; i < vec_size(param->tokens); ++i) {
         out = param->tokens[i];
-        if (out->token == TOKEN_EOL)
+        if (out->token == Token::EOL)
             ftepp_out(ftepp, "\n", false);
         else {
             ppmacro *find = ftepp_macro_find(ftepp, out->value);
@@ -736,7 +736,7 @@ static bool ftepp_macro_expand(ftepp_t *ftepp, ppmacro *macro, macroparam *param
     bool      old_inmacro;
     bool      strip = false;
 
-    int nextok;
+    Token nextok;
 
     if (vararg_start < vec_size(params))
         varargs = vec_size(params) - vararg_start;
@@ -751,9 +751,9 @@ static bool ftepp_macro_expand(ftepp_t *ftepp, ppmacro *macro, macroparam *param
     for (o = 0; o < vec_size(macro->output); ++o) {
         pptoken *out = macro->output[o];
         switch (out->token) {
-            case TOKEN_VA_ARGS:
+            case Token::VA_ARGS:
                 if (!macro->variadic) {
-                    ftepp_error(ftepp, "internal preprocessor error: TOKEN_VA_ARGS in non-variadic macro");
+                    ftepp_error(ftepp, "internal preprocessor error: Token::VA_ARGS in non-variadic macro");
                     vec_free(old_string);
                     return false;
                 }
@@ -768,7 +768,7 @@ static bool ftepp_macro_expand(ftepp_t *ftepp, ppmacro *macro, macroparam *param
                 }
                 break;
 
-            case TOKEN_VA_ARGS_ARRAY:
+            case Token::VA_ARGS_ARRAY:
                 if ((size_t)out->constval.i >= varargs) {
                     ftepp_error(ftepp, "subscript of `[%u]` is out of bounds for `__VA_ARGS__`", out->constval.i);
                     vec_free(old_string);
@@ -778,33 +778,33 @@ static bool ftepp_macro_expand(ftepp_t *ftepp, ppmacro *macro, macroparam *param
                 ftepp_param_out(ftepp, &params[out->constval.i + vararg_start]);
                 break;
 
-            case TOKEN_VA_COUNT:
+            case Token::VA_COUNT:
                 util_asprintf(&buffer, "%d", varargs);
                 ftepp_out(ftepp, buffer, false);
                 mem_d(buffer);
                 break;
 
-            case TOKEN_IDENT:
-            case TOKEN_TYPENAME:
-            case TOKEN_KEYWORD:
+            case Token::IDENT:
+            case Token::TYPENAME:
+            case Token::KEYWORD:
                 if (!macro_params_find(macro, out->value, &pi)) {
                     ftepp_out(ftepp, out->value, false);
                     break;
                 } else
                     ftepp_param_out(ftepp, &params[pi]);
                 break;
-            case '#':
+            case Token::HASH:
                 if (o + 1 < vec_size(macro->output)) {
                     nextok = macro->output[o+1]->token;
-                    if (nextok == '#') {
+                    if (nextok == Token::HASH) {
                         /* raw concatenation */
                         ++o;
                         strip = true;
                         break;
                     }
-                    if ( (nextok == TOKEN_IDENT    ||
-                          nextok == TOKEN_KEYWORD  ||
-                          nextok == TOKEN_TYPENAME) &&
+                    if ( (nextok == Token::IDENT    ||
+                          nextok == Token::KEYWORD  ||
+                          nextok == Token::TYPENAME) &&
                         macro_params_find(macro, macro->output[o+1]->value, &pi))
                     {
                         ++o;
@@ -815,13 +815,13 @@ static bool ftepp_macro_expand(ftepp_t *ftepp, ppmacro *macro, macroparam *param
                 }
                 ftepp_out(ftepp, "#", false);
                 break;
-            case TOKEN_EOL:
+            case Token::EOL:
                 ftepp_out(ftepp, "\n", false);
                 break;
             default:
                 buffer = out->value;
                 #define buffer_stripable(X) ((X) == ' ' || (X) == '\t')
-                if (vec_size(macro->output) > o + 1 && macro->output[o+1]->token == '#' && buffer_stripable(*buffer))
+                if (vec_size(macro->output) > o + 1 && macro->output[o+1]->token == Token::HASH && buffer_stripable(*buffer))
                     buffer++;
                 if (strip) {
                     while (buffer_stripable(*buffer)) buffer++;
@@ -907,7 +907,7 @@ static bool ftepp_macro_call(ftepp_t *ftepp, ppmacro *macro)
     if (!ftepp_skipallwhite(ftepp))
         return false;
 
-    if (ftepp->token != '(') {
+    if (ftepp->token != Token::PAREN_OPEN) {
         ftepp_error(ftepp, "expected macro parameters in parenthesis");
         return false;
     }
@@ -974,14 +974,14 @@ static bool ftepp_if_value(ftepp_t *ftepp, bool *out, double *value_out)
     if (!ftepp_skipspace(ftepp))
         return false;
 
-    while (ftepp->token == '!') {
+    while (ftepp->token == Token::NOT) {
         wasnot = true;
         ftepp_next(ftepp);
         if (!ftepp_skipspace(ftepp))
             return false;
     }
 
-    if (ftepp->token == TOKEN_OPERATOR && !strcmp(ftepp_tokval(ftepp), "-"))
+    if (ftepp->token == Token::OPERATOR && !strcmp(ftepp_tokval(ftepp), "-"))
     {
         wasneg = true;
         ftepp_next(ftepp);
@@ -990,23 +990,23 @@ static bool ftepp_if_value(ftepp_t *ftepp, bool *out, double *value_out)
     }
 
     switch (ftepp->token) {
-        case TOKEN_IDENT:
-        case TOKEN_TYPENAME:
-        case TOKEN_KEYWORD:
+        case Token::IDENT:
+        case Token::TYPENAME:
+        case Token::KEYWORD:
             if (!strcmp(ftepp_tokval(ftepp), "defined")) {
                 ftepp_next(ftepp);
                 if (!ftepp_skipspace(ftepp))
                     return false;
-                if (ftepp->token != '(') {
+                if (ftepp->token != Token::PAREN_OPEN) {
                     ftepp_error(ftepp, "`defined` keyword in #if requires a macro name in parenthesis");
                     return false;
                 }
                 ftepp_next(ftepp);
                 if (!ftepp_skipspace(ftepp))
                     return false;
-                if (ftepp->token != TOKEN_IDENT &&
-                    ftepp->token != TOKEN_TYPENAME &&
-                    ftepp->token != TOKEN_KEYWORD)
+                if (ftepp->token != Token::IDENT &&
+                    ftepp->token != Token::TYPENAME &&
+                    ftepp->token != Token::KEYWORD)
                 {
                     ftepp_error(ftepp, "defined() used on an unexpected token type");
                     return false;
@@ -1016,7 +1016,7 @@ static bool ftepp_if_value(ftepp_t *ftepp, bool *out, double *value_out)
                 ftepp_next(ftepp);
                 if (!ftepp_skipspace(ftepp))
                     return false;
-                if (ftepp->token != ')') {
+                if (ftepp->token != Token::PAREN_CLOSE) {
                     ftepp_error(ftepp, "expected closing paren");
                     return false;
                 }
@@ -1030,11 +1030,11 @@ static bool ftepp_if_value(ftepp_t *ftepp, bool *out, double *value_out)
             } else {
                 /* This does not expand recursively! */
                 switch (macro->output[0]->token) {
-                    case TOKEN_INTCONST:
+                    case Token::INTCONST:
                         *value_out = macro->output[0]->constval.i;
                         *out = !!(macro->output[0]->constval.i);
                         break;
-                    case TOKEN_FLOATCONST:
+                    case Token::FLOATCONST:
                         *value_out = macro->output[0]->constval.f;
                         *out = !!(macro->output[0]->constval.f);
                         break;
@@ -1044,24 +1044,24 @@ static bool ftepp_if_value(ftepp_t *ftepp, bool *out, double *value_out)
                 }
             }
             break;
-        case TOKEN_STRINGCONST:
+        case Token::STRINGCONST:
             *value_out = 0;
             *out = false;
             break;
-        case TOKEN_INTCONST:
+        case Token::INTCONST:
             *value_out = ftepp->lex->tok.constval.i;
             *out = !!(ftepp->lex->tok.constval.i);
             break;
-        case TOKEN_FLOATCONST:
+        case Token::FLOATCONST:
             *value_out = ftepp->lex->tok.constval.f;
             *out = !!(ftepp->lex->tok.constval.f);
             break;
 
-        case '(':
+        case Token::PAREN_OPEN:
             ftepp_next(ftepp);
             if (!ftepp_if_expr(ftepp, out, value_out))
                 return false;
-            if (ftepp->token != ')') {
+            if (ftepp->token != Token::PAREN_CLOSE) {
                 ftepp_error(ftepp, "expected closing paren in #if expression");
                 return false;
             }
@@ -1099,7 +1099,7 @@ static bool ftepp_if_expr(ftepp_t *ftepp, bool *out, double *value_out)
     if (!ftepp_if_op(ftepp))
         return false;
 
-    if (ftepp->token == ')' || ftepp->token != TOKEN_OPERATOR)
+    if (ftepp->token == Token::PAREN_CLOSE || ftepp->token != Token::OPERATOR)
         return true;
 
     /* FTEQCC is all right-associative and no precedence here */
@@ -1111,7 +1111,7 @@ static bool ftepp_if_expr(ftepp_t *ftepp, bool *out, double *value_out)
         double nextvalue;
 
         (void)nextvalue;
-        if (!ftepp_next(ftepp))
+        if (ftepp_next(ftepp) == Token::NONE)
             return false;
         if (!ftepp_if_expr(ftepp, &next, &nextvalue))
             return false;
@@ -1136,7 +1136,7 @@ static bool ftepp_if_expr(ftepp_t *ftepp, bool *out, double *value_out)
         const char opc1 = ftepp_tokval(ftepp)[1];
         double other;
 
-        if (!ftepp_next(ftepp))
+        if (ftepp_next(ftepp) == Token::NONE)
             return false;
         if (!ftepp_if_expr(ftepp, &next, &other))
             return false;
@@ -1173,7 +1173,7 @@ static bool ftepp_if(ftepp_t *ftepp, ppcondition *cond)
 
     if (!ftepp_skipspace(ftepp))
         return false;
-    if (ftepp->token == TOKEN_EOL) {
+    if (ftepp->token == Token::EOL) {
         ftepp_error(ftepp, "expected expression for #if-directive");
         return false;
     }
@@ -1197,9 +1197,9 @@ static bool ftepp_ifdef(ftepp_t *ftepp, ppcondition *cond)
         return false;
 
     switch (ftepp->token) {
-        case TOKEN_IDENT:
-        case TOKEN_TYPENAME:
-        case TOKEN_KEYWORD:
+        case Token::IDENT:
+        case Token::TYPENAME:
+        case Token::KEYWORD:
             macro = ftepp_macro_find(ftepp, ftepp_tokval(ftepp));
             break;
         default:
@@ -1211,7 +1211,7 @@ static bool ftepp_ifdef(ftepp_t *ftepp, ppcondition *cond)
     if (!ftepp_skipspace(ftepp))
         return false;
     /* relaxing this condition
-    if (ftepp->token != TOKEN_EOL && ftepp->token != TOKEN_EOF) {
+    if (ftepp->token != Token::EOL && ftepp->token != Token::END) {
         ftepp_error(ftepp, "stray tokens after #ifdef");
         return false;
     }
@@ -1231,9 +1231,9 @@ static bool ftepp_undef(ftepp_t *ftepp)
 
     if (ftepp->output_on) {
         switch (ftepp->token) {
-            case TOKEN_IDENT:
-            case TOKEN_TYPENAME:
-            case TOKEN_KEYWORD:
+            case Token::IDENT:
+            case Token::TYPENAME:
+            case Token::KEYWORD:
                 ftepp_macro_delete(ftepp, ftepp_tokval(ftepp));
                 break;
             default:
@@ -1246,7 +1246,7 @@ static bool ftepp_undef(ftepp_t *ftepp)
     if (!ftepp_skipspace(ftepp))
         return false;
     /* relaxing this condition
-    if (ftepp->token != TOKEN_EOL && ftepp->token != TOKEN_EOF) {
+    if (ftepp->token != Token::EOL && ftepp->token != Token::END) {
         ftepp_error(ftepp, "stray tokens after #ifdef");
         return false;
     }
@@ -1334,11 +1334,11 @@ static bool ftepp_directive_warning(ftepp_t *ftepp) {
         return false;
 
     /* handle the odd non string constant case so it works like C */
-    if (ftepp->token != TOKEN_STRINGCONST) {
+    if (ftepp->token != Token::STRINGCONST) {
         bool  store   = false;
         vec_append(message, 8, "#warning");
         ftepp_next(ftepp);
-        while (ftepp->token != TOKEN_EOL) {
+        while (ftepp->token != Token::EOL) {
             vec_append(message, strlen(ftepp_tokval(ftepp)), ftepp_tokval(ftepp));
             ftepp_next(ftepp);
         }
@@ -1365,10 +1365,10 @@ static void ftepp_directive_error(ftepp_t *ftepp) {
         return;
 
     /* handle the odd non string constant case so it works like C */
-    if (ftepp->token != TOKEN_STRINGCONST) {
+    if (ftepp->token != Token::STRINGCONST) {
         vec_append(message, 6, "#error");
         ftepp_next(ftepp);
-        while (ftepp->token != TOKEN_EOL) {
+        while (ftepp->token != Token::EOL) {
             vec_append(message, strlen(ftepp_tokval(ftepp)), ftepp_tokval(ftepp));
             ftepp_next(ftepp);
         }
@@ -1393,10 +1393,10 @@ static void ftepp_directive_message(ftepp_t *ftepp) {
         return;
 
     /* handle the odd non string constant case so it works like C */
-    if (ftepp->token != TOKEN_STRINGCONST) {
+    if (ftepp->token != Token::STRINGCONST) {
         vec_append(message, 8, "#message");
         ftepp_next(ftepp);
-        while (ftepp->token != TOKEN_EOL) {
+        while (ftepp->token != Token::EOL) {
             vec_append(message, strlen(ftepp_tokval(ftepp)), ftepp_tokval(ftepp));
             ftepp_next(ftepp);
         }
@@ -1433,7 +1433,7 @@ static bool ftepp_include(ftepp_t *ftepp)
     if (!ftepp_skipspace(ftepp))
         return false;
 
-    if (ftepp->token != TOKEN_STRINGCONST) {
+    if (ftepp->token != Token::STRINGCONST) {
         ppmacro *macro = ftepp_macro_find(ftepp, ftepp_tokval(ftepp));
         if (macro) {
             char *backup = ftepp->output_string;
@@ -1514,7 +1514,7 @@ static bool ftepp_include(ftepp_t *ftepp)
     (void)ftepp_next(ftepp);
     if (!ftepp_skipspace(ftepp))
         return false;
-    if (ftepp->token != TOKEN_EOL) {
+    if (ftepp->token != Token::EOL) {
         ftepp_error(ftepp, "stray tokens after #include");
         return false;
     }
@@ -1553,9 +1553,9 @@ static bool ftepp_hash(ftepp_t *ftepp)
         return false;
 
     switch (ftepp->token) {
-        case TOKEN_KEYWORD:
-        case TOKEN_IDENT:
-        case TOKEN_TYPENAME:
+        case Token::KEYWORD:
+        case Token::IDENT:
+        case Token::TYPENAME:
             if (!strcmp(ftepp_tokval(ftepp), "define")) {
                 ftepp_inmacro(ftepp, "define");
                 return ftepp_define(ftepp);
@@ -1684,16 +1684,16 @@ static bool ftepp_hash(ftepp_t *ftepp)
         default:
             ftepp_error(ftepp, "unexpected preprocessor token: `%s`", ftepp_tokval(ftepp));
             return false;
-        case TOKEN_EOL:
+        case Token::EOL:
             ftepp_errorat(ftepp, ctx, "empty preprocessor directive");
             return false;
-        case TOKEN_EOF:
+        case Token::END:
             ftepp_error(ftepp, "missing newline at end of file", ftepp_tokval(ftepp));
             return false;
 
         /* Builtins! Don't forget the builtins! */
-        case TOKEN_INTCONST:
-        case TOKEN_FLOATCONST:
+        case Token::INTCONST:
+        case Token::FLOATCONST:
             ftepp_out(ftepp, "#", false);
             return true;
     }
@@ -1717,12 +1717,12 @@ static bool ftepp_preprocess(ftepp_t *ftepp)
     ftepp_next(ftepp);
     do
     {
-        if (ftepp->token >= TOKEN_EOF)
+        if (ftepp->token >= Token::END)
             break;
         switch (ftepp->token) {
-            case TOKEN_KEYWORD:
-            case TOKEN_IDENT:
-            case TOKEN_TYPENAME:
+            case Token::KEYWORD:
+            case Token::IDENT:
+            case Token::TYPENAME:
                 /* is it a predef? */
                 if (OPTS_FLAG(FTEPP_PREDEFS)) {
                     char *(*predef)(ftepp_t*) = ftepp_predef(ftepp_tokval(ftepp));
@@ -1747,30 +1747,30 @@ static bool ftepp_preprocess(ftepp_t *ftepp)
                     break;
                 }
                 if (!ftepp_macro_call(ftepp, macro))
-                    ftepp->token = TOKEN_ERROR;
+                    ftepp->token = Token::ERROR;
                 break;
-            case '#':
+            case Token::HASH:
                 if (!newline) {
                     ftepp_out(ftepp, ftepp_tokval(ftepp), false);
                     ftepp_next(ftepp);
                     break;
                 }
                 ftepp->lex->flags.mergelines = true;
-                if (ftepp_next(ftepp) >= TOKEN_EOF) {
+                if (ftepp_next(ftepp) >= Token::END) {
                     ftepp_error(ftepp, "error in preprocessor directive");
-                    ftepp->token = TOKEN_ERROR;
+                    ftepp->token = Token::ERROR;
                     break;
                 }
                 if (!ftepp_hash(ftepp))
-                    ftepp->token = TOKEN_ERROR;
+                    ftepp->token = Token::ERROR;
                 ftepp->lex->flags.mergelines = false;
                 break;
-            case TOKEN_EOL:
+            case Token::EOL:
                 newline = true;
                 ftepp_out(ftepp, "\n", true);
                 ftepp_next(ftepp);
                 break;
-            case TOKEN_WHITE:
+            case Token::WHITE:
                 /* same as default but don't set newline=false */
                 ftepp_out(ftepp, ftepp_tokval(ftepp), true);
                 ftepp_next(ftepp);
@@ -1781,13 +1781,13 @@ static bool ftepp_preprocess(ftepp_t *ftepp)
                 ftepp_next(ftepp);
                 break;
         }
-    } while (!ftepp->errors && ftepp->token < TOKEN_EOF);
+    } while (!ftepp->errors && ftepp->token < Token::END);
 
     /* force a 0 at the end but don't count it as added to the output */
     vec_push(ftepp->output_string, 0);
     vec_shrinkby(ftepp->output_string, 1);
 
-    return (ftepp->token == TOKEN_EOF);
+    return (ftepp->token == Token::END);
 }
 
 /* Like in parser.c - files keep the previous state so we have one global

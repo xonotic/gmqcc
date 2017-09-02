@@ -65,9 +65,9 @@ static bool parser_next(parser_t &parser)
 {
     /* lex_do kills the previous token */
     parser.tok = lex_do(parser.lex);
-    if (parser.tok == TOKEN_EOF)
+    if (parser.tok == Token::END)
         return true;
-    if (parser.tok >= TOKEN_ERROR) {
+    if (parser.tok >= Token::ERROR) {
         parseerror(parser, "lex error");
         return false;
     }
@@ -76,17 +76,6 @@ static bool parser_next(parser_t &parser)
 
 #define parser_tokval(p) ((p).lex->tok.value)
 #define parser_token(p)  (&((p).lex->tok))
-
-char *parser_strdup(const char *str)
-{
-    if (str && !*str) {
-        /* actually dup empty strings */
-        char *out = (char*)mem_a(1);
-        *out = 0;
-        return out;
-    }
-    return util_strdup(str);
-}
 
 static ast_expression* parser_find_field(parser_t &parser, const char *name) {
     return (ast_expression*)util_htget(parser.htfields, name);
@@ -1427,11 +1416,11 @@ static bool parser_close_paren(parser_t &parser, shunt *sy)
 static void parser_reclassify_token(parser_t &parser)
 {
     size_t i;
-    if (parser.tok >= TOKEN_START)
+    if (parser.tok >= Token::START)
         return;
     for (i = 0; i < operator_count; ++i) {
         if (!strcmp(parser_tokval(parser), operators[i].op)) {
-            parser.tok = TOKEN_OPERATOR;
+            parser.tok = Token::OPERATOR;
             return;
         }
     }
@@ -1473,7 +1462,7 @@ static ast_expression* parse_vararg_do(parser_t &parser)
         return out;
     }
 
-    if (!parser_next(parser) || (parser.tok != TOKEN_IDENT && parser.tok != TOKEN_TYPENAME)) {
+    if (!parser_next(parser) || (parser.tok != Token::IDENT && parser.tok != Token::TYPENAME)) {
         ast_unref(idx);
         parseerror(parser, "expected typename for vararg");
         return nullptr;
@@ -1528,7 +1517,7 @@ bool ftepp_predef_exists(const char *name);
 static bool parse_sya_operand(parser_t &parser, shunt *sy, bool with_labels)
 {
     if (OPTS_FLAG(TRANSLATABLE_STRINGS) &&
-        parser.tok == TOKEN_IDENT &&
+        parser.tok == Token::IDENT &&
         !strcmp(parser_tokval(parser), "_"))
     {
         /* a translatable string */
@@ -1540,7 +1529,7 @@ static bool parse_sya_operand(parser_t &parser, shunt *sy, bool with_labels)
             return false;
         }
         parser.lex->flags.noops = false;
-        if (!parser_next(parser) || parser.tok != TOKEN_STRINGCONST) {
+        if (!parser_next(parser) || parser.tok != Token::STRINGCONST) {
             parseerror(parser, "expected a constant string in translatable-string extension");
             return false;
         }
@@ -1555,7 +1544,7 @@ static bool parse_sya_operand(parser_t &parser, shunt *sy, bool with_labels)
         }
         return true;
     }
-    else if (parser.tok == TOKEN_DOTS)
+    else if (parser.tok == Token::DOTS)
     {
         ast_expression *va;
         if (!OPTS_FLAG(VARIADIC_ARGS)) {
@@ -1568,35 +1557,35 @@ static bool parse_sya_operand(parser_t &parser, shunt *sy, bool with_labels)
         sy->out.push_back(syexp(parser_ctx(parser), va));
         return true;
     }
-    else if (parser.tok == TOKEN_FLOATCONST) {
+    else if (parser.tok == Token::FLOATCONST) {
         ast_expression *val = parser.m_fold.constgen_float((parser_token(parser)->constval.f), false);
         if (!val)
             return false;
         sy->out.push_back(syexp(parser_ctx(parser), val));
         return true;
     }
-    else if (parser.tok == TOKEN_INTCONST || parser.tok == TOKEN_CHARCONST) {
+    else if (parser.tok == Token::INTCONST || parser.tok == Token::CHARCONST) {
         ast_expression *val = parser.m_fold.constgen_float((qcfloat_t)(parser_token(parser)->constval.i), false);
         if (!val)
             return false;
         sy->out.push_back(syexp(parser_ctx(parser), val));
         return true;
     }
-    else if (parser.tok == TOKEN_STRINGCONST) {
+    else if (parser.tok == Token::STRINGCONST) {
         ast_expression *val = parser.m_fold.constgen_string(parser_tokval(parser), false);
         if (!val)
             return false;
         sy->out.push_back(syexp(parser_ctx(parser), val));
         return true;
     }
-    else if (parser.tok == TOKEN_VECTORCONST) {
+    else if (parser.tok == Token::VECTORCONST) {
         ast_expression *val = parser.m_fold.constgen_vector(parser_token(parser)->constval.v);
         if (!val)
             return false;
         sy->out.push_back(syexp(parser_ctx(parser), val));
         return true;
     }
-    else if (parser.tok == TOKEN_IDENT)
+    else if (parser.tok == Token::IDENT)
     {
         const char     *ctoken = parser_tokval(parser);
         ast_expression *prev = sy->out.size() ? sy->out.back().out : nullptr;
@@ -1713,12 +1702,12 @@ static ast_expression* parse_expression_leave(parser_t &parser, bool stopatcomma
 
     while (true)
     {
-        if (parser.tok == TOKEN_TYPENAME) {
+        if (parser.tok == Token::TYPENAME) {
             parseerror(parser, "unexpected typename `%s`", parser_tokval(parser));
             goto onerr;
         }
 
-        if (parser.tok == TOKEN_OPERATOR)
+        if (parser.tok == Token::OPERATOR)
         {
             /* classify the operator */
             const oper_info *op;
@@ -1742,13 +1731,13 @@ static ast_expression* parse_expression_leave(parser_t &parser, bool stopatcomma
             /* when declaring variables, a comma starts a new variable */
             if (op->id == opid1(',') && sy.paren.empty() && stopatcomma) {
                 /* fixup the token */
-                parser.tok = ',';
+                parser.tok = Token::COMMA;
                 break;
             }
 
             /* a colon without a pervious question mark cannot be a ternary */
             if (!ternaries && op->id == opid2(':','?')) {
-                parser.tok = ':';
+                parser.tok = Token::COLON;
                 break;
             }
 
@@ -1924,7 +1913,7 @@ static ast_expression* parse_expression_leave(parser_t &parser, bool stopatcomma
         else {
             /* in this case we might want to allow constant string concatenation */
             bool concatenated = false;
-            if (parser.tok == TOKEN_STRINGCONST && sy.out.size()) {
+            if (parser.tok == Token::STRINGCONST && sy.out.size()) {
                 ast_expression *lexpr = sy.out.back().out;
                 if (ast_istype(lexpr, ast_value)) {
                     ast_value *last = (ast_value*)lexpr;
@@ -2130,7 +2119,7 @@ static bool parse_if(parser_t &parser, ast_block *block, ast_expression **out)
         parseerror(parser, "expected condition or 'not'");
         return false;
     }
-    if (parser.tok == TOKEN_IDENT && !strcmp(parser_tokval(parser), "not")) {
+    if (parser.tok == Token::IDENT && !strcmp(parser_tokval(parser), "not")) {
         ifnot = true;
         if (!parser_next(parser)) {
             parseerror(parser, "expected condition in parenthesis");
@@ -2217,7 +2206,7 @@ static bool parse_while(parser_t &parser, ast_block *block, ast_expression **out
     if (parser.tok == ':') {
         if (!OPTS_FLAG(LOOP_LABELS))
             parseerror(parser, "labeled loops not activated, try using -floop-labels");
-        if (!parser_next(parser) || parser.tok != TOKEN_IDENT) {
+        if (!parser_next(parser) || parser.tok != Token::IDENT) {
             parseerror(parser, "expected loop label");
             return false;
         }
@@ -2318,7 +2307,7 @@ static bool parse_dowhile(parser_t &parser, ast_block *block, ast_expression **o
     if (parser.tok == ':') {
         if (!OPTS_FLAG(LOOP_LABELS))
             parseerror(parser, "labeled loops not activated, try using -floop-labels");
-        if (!parser_next(parser) || parser.tok != TOKEN_IDENT) {
+        if (!parser_next(parser) || parser.tok != Token::IDENT) {
             parseerror(parser, "expected loop label");
             return false;
         }
@@ -2364,7 +2353,7 @@ static bool parse_dowhile_go(parser_t &parser, ast_block *block, ast_expression 
         return false;
 
     /* expect the "while" */
-    if (parser.tok != TOKEN_KEYWORD ||
+    if (parser.tok != Token::KEYWORD ||
         strcmp(parser_tokval(parser), "while"))
     {
         parseerror(parser, "expected 'while' and condition");
@@ -2438,7 +2427,7 @@ static bool parse_for(parser_t &parser, ast_block *block, ast_expression **out)
     if (parser.tok == ':') {
         if (!OPTS_FLAG(LOOP_LABELS))
             parseerror(parser, "labeled loops not activated, try using -floop-labels");
-        if (!parser_next(parser) || parser.tok != TOKEN_IDENT) {
+        if (!parser_next(parser) || parser.tok != Token::IDENT) {
             parseerror(parser, "expected loop label");
             return false;
         }
@@ -2497,10 +2486,10 @@ static bool parse_for_go(parser_t &parser, ast_block *block, ast_expression **ou
     }
 
     typevar = nullptr;
-    if (parser.tok == TOKEN_IDENT)
+    if (parser.tok == Token::IDENT)
         typevar = parser_find_typedef(parser, parser_tokval(parser), 0);
 
-    if (typevar || parser.tok == TOKEN_TYPENAME) {
+    if (typevar || parser.tok == Token::TYPENAME) {
         if (!parse_variable(parser, block, true, CV_VAR, typevar, false, false, 0, nullptr))
             goto onerr;
     }
@@ -2709,7 +2698,7 @@ static bool parse_break_continue(parser_t &parser, ast_block *block, ast_express
             parseerror(parser, "`break` can only be used inside loops or switches");
     }
 
-    if (parser.tok == TOKEN_IDENT) {
+    if (parser.tok == Token::IDENT) {
         if (!OPTS_FLAG(LOOP_LABELS))
             parseerror(parser, "labeled loops not activated, try using -floop-labels");
         i = loops.size();
@@ -2771,7 +2760,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
 
     for (;;) {
         size_t i;
-        if (parser.tok == TOKEN_ATTRIBUTE_OPEN) {
+        if (parser.tok == Token::ATTRIBUTE_OPEN) {
             had_attrib = true;
             /* parse an attribute */
             if (!parser_next(parser)) {
@@ -2783,7 +2772,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
             for (i = 0; i < GMQCC_ARRAY_COUNT(attributes); i++) {
                 if (!strcmp(parser_tokval(parser), attributes[i].name)) {
                     flags |= attributes[i].flag;
-                    if (!parser_next(parser) || parser.tok != TOKEN_ATTRIBUTE_CLOSE) {
+                    if (!parser_next(parser) || parser.tok != Token::ATTRIBUTE_CLOSE) {
                         parseerror(parser, "`%s` attribute has no parameters, expected `]]`",
                             attributes[i].name);
                         *cvq = CV_WRONG;
@@ -2799,7 +2788,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
 
             if (!strcmp(parser_tokval(parser), "noref")) {
                 had_noref = true;
-                if (!parser_next(parser) || parser.tok != TOKEN_ATTRIBUTE_CLOSE) {
+                if (!parser_next(parser) || parser.tok != Token::ATTRIBUTE_CLOSE) {
                     parseerror(parser, "`noref` attribute has no parameters, expected `]]`");
                     *cvq = CV_WRONG;
                     return false;
@@ -2815,7 +2804,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
                 }
 
                 if (parser.tok == '(') {
-                    if (!parser_next(parser) || parser.tok != TOKEN_STRINGCONST) {
+                    if (!parser_next(parser) || parser.tok != Token::STRINGCONST) {
                         parseerror(parser, "`alias` attribute missing parameter");
                         goto argerr;
                     }
@@ -2838,7 +2827,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
                     }
                 }
 
-                if (parser.tok != TOKEN_ATTRIBUTE_CLOSE) {
+                if (parser.tok != Token::ATTRIBUTE_CLOSE) {
                     parseerror(parser, "`alias` attribute expected `]]`");
                     goto argerr;
                 }
@@ -2853,7 +2842,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
                 }
 
                 if (parser.tok == '(') {
-                    if (!parser_next(parser) || parser.tok != TOKEN_STRINGCONST) {
+                    if (!parser_next(parser) || parser.tok != Token::STRINGCONST) {
                         parseerror(parser, "`deprecated` attribute missing parameter");
                         goto argerr;
                     }
@@ -2876,7 +2865,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
                     }
                 }
                 /* no message */
-                if (parser.tok != TOKEN_ATTRIBUTE_CLOSE) {
+                if (parser.tok != Token::ATTRIBUTE_CLOSE) {
                     parseerror(parser, "`deprecated` attribute expected `]]`");
 
                     argerr: /* ugly */
@@ -2904,7 +2893,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
                     }
                     if (parser.tok != ')') {
                         do {
-                            if (parser.tok != TOKEN_IDENT)
+                            if (parser.tok != Token::IDENT)
                                 goto bad_coverage_arg;
                             if (!strcmp(parser_tokval(parser), "block"))
                                 flags |= AST_FLAG_BLOCK_COVERAGE;
@@ -2931,7 +2920,7 @@ static bool parse_qualifiers(parser_t &parser, bool with_local, int *cvq, bool *
             {
                 /* Skip tokens until we hit a ]] */
                 (void)!parsewarning(parser, WARN_UNKNOWN_ATTRIBUTE, "unknown attribute starting with `%s`", parser_tokval(parser));
-                while (parser.tok != TOKEN_ATTRIBUTE_CLOSE) {
+                while (parser.tok != Token::ATTRIBUTE_CLOSE) {
                     if (!parser_next(parser)) {
                         parseerror(parser, "error inside attribute");
                         *cvq = CV_WRONG;
@@ -2994,7 +2983,7 @@ static bool parse_switch(parser_t &parser, ast_block *block, ast_expression **ou
     if (parser.tok == ':') {
         if (!OPTS_FLAG(LOOP_LABELS))
             parseerror(parser, "labeled loops not activated, try using -floop-labels");
-        if (!parser_next(parser) || parser.tok != TOKEN_IDENT) {
+        if (!parser_next(parser) || parser.tok != Token::IDENT) {
             parseerror(parser, "expected loop label");
             return false;
         }
@@ -3081,9 +3070,9 @@ static bool parse_switch_go(parser_t &parser, ast_block *block, ast_expression *
     parser_enterblock(parser);
     while (true) {
         typevar = nullptr;
-        if (parser.tok == TOKEN_IDENT)
+        if (parser.tok == Token::IDENT)
             typevar = parser_find_typedef(parser, parser_tokval(parser), 0);
-        if (typevar || parser.tok == TOKEN_TYPENAME) {
+        if (typevar || parser.tok == Token::TYPENAME) {
             if (!parse_variable(parser, block, true, CV_NONE, typevar, false, false, 0, nullptr)) {
                 delete switchnode;
                 return false;
@@ -3215,7 +3204,7 @@ static bool parse_switch_go(parser_t &parser, ast_block *block, ast_expression *
             ast_expression *expr;
             if (parser.tok == '}')
                 break;
-            if (parser.tok == TOKEN_KEYWORD) {
+            if (parser.tok == Token::KEYWORD) {
                 if (!strcmp(parser_tokval(parser), "case") ||
                     !strcmp(parser_tokval(parser), "default"))
                 {
@@ -3295,7 +3284,7 @@ static bool parse_goto(parser_t &parser, ast_expression **out)
     if (!parser_next(parser))
         return false;
 
-    if (parser.tok != TOKEN_IDENT) {
+    if (parser.tok != Token::IDENT) {
         ast_expression *expression;
 
         /* could be an expression i.e computed goto :-) */
@@ -3348,33 +3337,33 @@ static bool parse_skipwhite(parser_t &parser)
     do {
         if (!parser_next(parser))
             return false;
-    } while (parser.tok == TOKEN_WHITE && parser.tok < TOKEN_ERROR);
-    return parser.tok < TOKEN_ERROR;
+    } while (parser.tok == Token::WHITE && parser.tok < Token::ERROR);
+    return parser.tok < Token::ERROR;
 }
 
 static bool parse_eol(parser_t &parser)
 {
     if (!parse_skipwhite(parser))
         return false;
-    return parser.tok == TOKEN_EOL;
+    return parser.tok == Token::EOL;
 }
 
 static bool parse_pragma_do(parser_t &parser)
 {
     if (!parser_next(parser) ||
-        parser.tok != TOKEN_IDENT ||
+        parser.tok != Token::IDENT ||
         strcmp(parser_tokval(parser), "pragma"))
     {
         parseerror(parser, "expected `pragma` keyword after `#`, got `%s`", parser_tokval(parser));
         return false;
     }
-    if (!parse_skipwhite(parser) || parser.tok != TOKEN_IDENT) {
+    if (!parse_skipwhite(parser) || parser.tok != Token::IDENT) {
         parseerror(parser, "expected pragma, got `%s`", parser_tokval(parser));
         return false;
     }
 
     if (!strcmp(parser_tokval(parser), "noref")) {
-        if (!parse_skipwhite(parser) || parser.tok != TOKEN_INTCONST) {
+        if (!parse_skipwhite(parser) || parser.tok != Token::INTCONST) {
             parseerror(parser, "`noref` pragma requires an argument: 0 or 1");
             return false;
         }
@@ -3404,7 +3393,7 @@ static bool parse_pragma(parser_t &parser)
     parser.lex->flags.preprocessing = true;
     parser.lex->flags.mergelines = true;
     auto ret = parse_pragma_do(parser);
-    if (parser.tok != TOKEN_EOL) {
+    if (parser.tok != Token::EOL) {
         parseerror(parser, "junk after pragma");
         ret = false;
     }
@@ -3427,10 +3416,10 @@ static bool parse_statement(parser_t &parser, ast_block *block, ast_expression *
 
     *out = nullptr;
 
-    if (parser.tok == TOKEN_IDENT)
+    if (parser.tok == Token::IDENT)
         typevar = parser_find_typedef(parser, parser_tokval(parser), 0);
 
-    if (typevar || parser.tok == TOKEN_TYPENAME || parser.tok == '.' || parser.tok == TOKEN_DOTS)
+    if (typevar || parser.tok == Token::TYPENAME || parser.tok == '.' || parser.tok == Token::DOTS)
     {
         /* local variable */
         if (!block) {
@@ -3451,7 +3440,7 @@ static bool parse_statement(parser_t &parser, ast_block *block, ast_expression *
             return false;
         return parse_variable(parser, block, false, cvq, nullptr, noref, is_static, qflags, vstring);
     }
-    else if (parser.tok == TOKEN_KEYWORD)
+    else if (parser.tok == Token::KEYWORD)
     {
         if (!strcmp(parser_tokval(parser), "__builtin_debug_printtype"))
         {
@@ -3463,7 +3452,7 @@ static bool parse_statement(parser_t &parser, ast_block *block, ast_expression *
                 return false;
             }
 
-            if (parser.tok == TOKEN_IDENT && (tdef = parser_find_typedef(parser, parser_tokval(parser), 0)))
+            if (parser.tok == Token::IDENT && (tdef = parser_find_typedef(parser, parser_tokval(parser), 0)))
             {
                 ast_type_to_string(tdef, ty, sizeof(ty));
                 con_out("__builtin_debug_printtype: `%s`=`%s`\n", tdef->m_name.c_str(), ty);
@@ -3563,7 +3552,7 @@ static bool parse_statement(parser_t &parser, ast_block *block, ast_expression *
             parseerror(parser, "expected label name");
             return false;
         }
-        if (parser.tok != TOKEN_IDENT) {
+        if (parser.tok != Token::IDENT) {
             parseerror(parser, "label must be an identifier");
             return false;
         }
@@ -3634,7 +3623,7 @@ static bool parse_enum(parser_t &parser)
 
     /* enumeration attributes (can add more later) */
     if (parser.tok == ':') {
-        if (!parser_next(parser) || parser.tok != TOKEN_IDENT){
+        if (!parser_next(parser) || parser.tok != Token::IDENT){
             parseerror(parser, "expected `flag` or `reverse` for enumeration attribute");
             return false;
         }
@@ -3659,7 +3648,7 @@ static bool parse_enum(parser_t &parser)
     }
 
     while (true) {
-        if (!parser_next(parser) || parser.tok != TOKEN_IDENT) {
+        if (!parser_next(parser) || parser.tok != Token::IDENT) {
             if (parser.tok == '}') {
                 /* allow an empty enum */
                 break;
@@ -3758,7 +3747,7 @@ static bool parse_block_into(parser_t &parser, ast_block *block)
         goto cleanup;
     }
 
-    while (parser.tok != TOKEN_EOF && parser.tok < TOKEN_ERROR)
+    while (parser.tok != Token::END && parser.tok < Token::ERROR)
     {
         ast_expression *expr = nullptr;
         if (parser.tok == '}')
@@ -3923,7 +3912,7 @@ static bool parse_function_body(parser_t &parser, ast_value *var)
             return false;
         }
 
-        if (parser.tok == TOKEN_IDENT && !parser_find_var(parser, parser_tokval(parser)))
+        if (parser.tok == Token::IDENT && !parser_find_var(parser, parser_tokval(parser)))
         {
             /* qc allows the use of not-yet-declared functions here
              * - this automatically creates a prototype */
@@ -4634,11 +4623,11 @@ static ast_value *parse_parameter_list(parser_t &parser, ast_value *var)
         if (is_varargs) {
             /* '...' indicates a varargs function */
             variadic = true;
-            if (parser.tok != ')' && parser.tok != TOKEN_IDENT) {
+            if (parser.tok != ')' && parser.tok != Token::IDENT) {
                 parseerror(parser, "`...` must be the last parameter of a variadic function declaration");
                 goto on_error;
             }
-            if (parser.tok == TOKEN_IDENT) {
+            if (parser.tok == Token::IDENT) {
                 argcounter = util_strdup(parser_tokval(parser));
                 if (!parser_next(parser) || parser.tok != ')') {
                     parseerror(parser, "`...` must be the last parameter of a variadic function declaration");
@@ -4654,15 +4643,15 @@ static ast_value *parse_parameter_list(parser_t &parser, ast_value *var)
                 goto on_error;
             }
             /* type-restricted varargs */
-            if (parser.tok == TOKEN_DOTS) {
+            if (parser.tok == Token::DOTS) {
                 variadic = true;
                 varparam = params.back().release();
                 params.pop_back();
-                if (!parser_next(parser) || (parser.tok != ')' && parser.tok != TOKEN_IDENT)) {
+                if (!parser_next(parser) || (parser.tok != ')' && parser.tok != Token::IDENT)) {
                     parseerror(parser, "`...` must be the last parameter of a variadic function declaration");
                     goto on_error;
                 }
-                if (parser.tok == TOKEN_IDENT) {
+                if (parser.tok == Token::IDENT) {
                     argcounter = util_strdup(parser_tokval(parser));
                     param->m_name = argcounter;
                     if (!parser_next(parser) || parser.tok != ')') {
@@ -4808,14 +4797,14 @@ static ast_value *parse_typename(parser_t &parser, ast_value **storebase, ast_va
     bool        wasarray = false;
     size_t      morefields = 0;
 
-    bool        vararg = (parser.tok == TOKEN_DOTS);
+    bool        vararg = (parser.tok == Token::DOTS);
 
     ctx = parser_ctx(parser);
 
     /* types may start with a dot */
-    if (parser.tok == '.' || parser.tok == TOKEN_DOTS) {
+    if (parser.tok == '.' || parser.tok == Token::DOTS) {
         isfield = true;
-        if (parser.tok == TOKEN_DOTS)
+        if (parser.tok == Token::DOTS)
             morefields += 2;
         /* if we parsed a dot we need a typename now */
         if (!parser_next(parser)) {
@@ -4829,7 +4818,7 @@ static ast_value *parse_typename(parser_t &parser, ast_value **storebase, ast_va
         while (true) {
             if (parser.tok == '.')
                 ++morefields;
-            else if (parser.tok == TOKEN_DOTS)
+            else if (parser.tok == Token::DOTS)
                 morefields += 3;
             else
                 break;
@@ -4840,9 +4829,9 @@ static ast_value *parse_typename(parser_t &parser, ast_value **storebase, ast_va
             }
         }
     }
-    if (parser.tok == TOKEN_IDENT)
+    if (parser.tok == Token::IDENT)
         cached_typedef = parser_find_typedef(parser, parser_tokval(parser), 0);
-    if (!cached_typedef && parser.tok != TOKEN_TYPENAME) {
+    if (!cached_typedef && parser.tok != Token::TYPENAME) {
         if (vararg && is_vararg) {
             *is_vararg = true;
             return nullptr;
@@ -4898,10 +4887,10 @@ static ast_value *parse_typename(parser_t &parser, ast_value **storebase, ast_va
     }
 
     /* there may be a name now */
-    if (parser.tok == TOKEN_IDENT || parser.tok == TOKEN_KEYWORD) {
+    if (parser.tok == Token::IDENT || parser.tok == Token::KEYWORD) {
         if (!strcmp(parser_tokval(parser), "break"))
             (void)!parsewarning(parser, WARN_BREAKDEF, "break definition ignored (suggest removing it)");
-        else if (parser.tok == TOKEN_KEYWORD)
+        else if (parser.tok == Token::KEYWORD)
             goto leave;
 
         name = util_strdup(parser_tokval(parser));
@@ -5664,7 +5653,7 @@ skipvar:
 
                 /* we only want the integral part anyways */
                 builtin_num = integral;
-            } else if (parser.tok == TOKEN_INTCONST) {
+            } else if (parser.tok == Token::INTCONST) {
                 builtin_num = parser_token(parser)->constval.i;
             } else {
                 parseerror(parser, "builtin number must be a compile time constant");
@@ -5832,7 +5821,7 @@ another:
                 break;
             }
 
-            if (parser.tok != TOKEN_IDENT) {
+            if (parser.tok != Token::IDENT) {
                 parseerror(parser, "expected another variable");
                 break;
             }
@@ -5878,9 +5867,9 @@ cleanup:
 static bool parser_global_statement(parser_t &parser)
 {
     ast_value *istype    = nullptr;
-    if ((parser.tok == TOKEN_IDENT && (istype = parser_find_typedef(parser, parser_tokval(parser), 0)) != nullptr)
-        || parser.tok == TOKEN_TYPENAME
-        || parser.tok == '.' || parser.tok == TOKEN_DOTS) {
+    if ((parser.tok == Token::IDENT && (istype = parser_find_typedef(parser, parser_tokval(parser), 0)) != nullptr)
+        || parser.tok == Token::TYPENAME
+        || parser.tok == '.' || parser.tok == Token::DOTS) {
         return parse_variable(parser, nullptr, false, CV_NONE, istype, false, false, 0, nullptr);
     }
 
@@ -5895,11 +5884,11 @@ static bool parser_global_statement(parser_t &parser)
         return parse_variable(parser, nullptr, false, cvq, nullptr, noref, is_static, qflags, vstring);
     }
 
-    if (parser.tok == TOKEN_IDENT && strcmp(parser_tokval(parser), "enum") == 0) {
+    if (parser.tok == Token::IDENT && strcmp(parser_tokval(parser), "enum") == 0) {
         return parse_enum(parser);
     }
 
-    if (parser.tok == TOKEN_KEYWORD) {
+    if (parser.tok == Token::KEYWORD) {
         if (strcmp(parser_tokval(parser), "typedef") == 0) {
             if (!parser_next(parser)) {
                 parseerror(parser, "expected type definition after 'typedef'");
@@ -6004,7 +5993,7 @@ static void generate_checksum(parser_t &parser, ir_builder &ir)
 
 parser_t::parser_t()
     : lex(nullptr)
-    , tok(0)
+    , tok(Token::NONE)
     , ast_cleaned(false)
     , translated(0)
     , crc_globals(0)
@@ -6083,9 +6072,9 @@ static bool parser_compile(parser_t &parser)
         compile_errors = true;
         goto cleanup;
     }
-    while (parser.tok != TOKEN_EOF && parser.tok < TOKEN_ERROR) {
+    while (parser.tok != Token::END && parser.tok < Token::ERROR) {
         if (parser_global_statement(parser)) continue;
-        if (parser.tok == TOKEN_EOF) {
+        if (parser.tok == Token::END) {
             parseerror(parser, "unexpected end of file");
         } else if (compile_errors) {
             parseerror(parser, "there have been errors, bailing out");

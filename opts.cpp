@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "gmqcc.h"
+#include "lexer.h"
 
 const unsigned int opts_opt_oflag[COUNT_OPTIMIZATIONS+1] = {
 # define GMQCC_TYPE_OPTIMIZATIONS
@@ -210,7 +211,7 @@ static size_t opts_ini_parse (
     char *read_name;
     char *read_value;
 
-    while (util_getline(&line, &linesize, filehandle) != EOF) {
+    while (util_getline(&line, &linesize, filehandle) != Token::END) {
         parse_beg = line;
 
         /* handle BOM */

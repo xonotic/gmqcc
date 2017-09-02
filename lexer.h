@@ -2,8 +2,95 @@
 #define GMQCC_LEXER_HDR
 #include "gmqcc.h"
 
+/* Lexer
+ *
+ */
+enum Token : int { // todo: enum class
+    /* Other tokens which we can return: */
+    NONE = 0,
+
+    CR = '\r',
+    LF = '\n',
+    WS = ' ',
+    BACKSLASH = '\\',
+
+    HASH = '#',
+    DOLLAR = '$',
+
+    DOT = '.',
+    COMMA = ',',
+    COLON = ':',
+    SEMICOLON = ';',
+
+    AND = '&',
+    OR = '|',
+    XOR = '^',
+    BITNOT = '~',
+    NOT = '!',
+
+    LT = '<',
+    GT = '>',
+    EQ = '=',
+
+    MUL = '*',
+    DIV = '/',
+    MOD = '%',
+
+    ADD = '+',
+    SUB = '-',
+
+    QUOT_SINGLE = '\'',
+    QUOT_DOUBLE = '"',
+
+    QUESTION = '?',
+
+    BRACE_OPEN = '{', BRACE_CLOSE = '}',
+    BRACKET_OPEN = '[', BRACKET_CLOSE = ']',
+    PAREN_OPEN = '(', PAREN_CLOSE = ')',
+
+    START = 128,
+
+    IDENT,
+
+    TYPENAME,
+
+    OPERATOR,
+
+    KEYWORD, /* loop */
+
+    DOTS, /* 3 dots, ... */
+
+    ATTRIBUTE_OPEN,  /* [[ */
+    ATTRIBUTE_CLOSE, /* ]] */
+
+    VA_ARGS, /* for the ftepp only */
+    VA_ARGS_ARRAY, /* for the ftepp only */
+    VA_COUNT,     /* to get the count of vaargs */
+
+    STRINGCONST, /* not the typename but an actual "string" */
+    CHARCONST,
+    VECTORCONST,
+    INTCONST,
+    FLOATCONST,
+
+    WHITE,
+    EOL,
+
+    /* if we add additional tokens before this, the exposed API
+     * should not be broken anyway, but EOF/ERROR/... should
+     * still be at the bottom
+     */
+    END = 1024,
+
+    /* We use '< ERROR', so FATAL must come after it and any
+     * other error related tokens as well
+     */
+    ERROR,
+    FATAL /* internal error, eg out of memory */
+};
+
 struct token {
-    int ttype;
+    Token ttype;
     char *value;
     union {
         vec3_t v;
@@ -12,53 +99,6 @@ struct token {
         qc_type t; /* type */
     } constval;
     lex_ctx_t ctx;
-};
-
-/* Lexer
- *
- */
-enum {
-    /* Other tokens which we can return: */
-    TOKEN_NONE = 0,
-    TOKEN_START = 128,
-
-    TOKEN_IDENT,
-
-    TOKEN_TYPENAME,
-
-    TOKEN_OPERATOR,
-
-    TOKEN_KEYWORD, /* loop */
-
-    TOKEN_DOTS, /* 3 dots, ... */
-
-    TOKEN_ATTRIBUTE_OPEN,  /* [[ */
-    TOKEN_ATTRIBUTE_CLOSE, /* ]] */
-
-    TOKEN_VA_ARGS, /* for the ftepp only */
-    TOKEN_VA_ARGS_ARRAY, /* for the ftepp only */
-    TOKEN_VA_COUNT,     /* to get the count of vaargs */
-
-    TOKEN_STRINGCONST, /* not the typename but an actual "string" */
-    TOKEN_CHARCONST,
-    TOKEN_VECTORCONST,
-    TOKEN_INTCONST,
-    TOKEN_FLOATCONST,
-
-    TOKEN_WHITE,
-    TOKEN_EOL,
-
-    /* if we add additional tokens before this, the exposed API
-     * should not be broken anyway, but EOF/ERROR/... should
-     * still be at the bottom
-     */
-    TOKEN_EOF = 1024,
-
-    /* We use '< TOKEN_ERROR', so TOKEN_FATAL must come after it and any
-     * other error related tokens as well
-     */
-    TOKEN_ERROR,
-    TOKEN_FATAL /* internal error, eg out of memory */
 };
 
 struct frame_macro {
@@ -77,7 +117,7 @@ struct lex_file {
     size_t  sline; /* line at the start of a token */
     size_t  column;
 
-    int     peek[256];
+    Token   peek[256];
     size_t  peekpos;
 
     bool    eof;
@@ -101,7 +141,7 @@ struct lex_file {
 lex_file* lex_open (const char *file);
 lex_file* lex_open_string(const char *str, size_t len, const char *name);
 void      lex_close(lex_file   *lex);
-int       lex_do   (lex_file   *lex);
+Token     lex_do   (lex_file   *lex);
 void      lex_cleanup(void);
 
 /* Parser

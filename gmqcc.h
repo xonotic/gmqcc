@@ -176,7 +176,7 @@ char *stat_mem_strdup(const char *, bool);
 #define util_islower(a) (((unsigned)(a)-'a') < 26)
 #define util_isupper(a) (((unsigned)(a)-'A') < 26)
 #define util_isprint(a) (((unsigned)(a)-0x20) < 0x5F)
-#define util_isspace(a) (((a) >= 9 && (a) <= 13) || (a) == ' ')
+#define util_isspace(a) (((a) >= 9 && (a) <= 13) || (a) == Token::WS)
 
 bool  util_strupper(const char *);
 bool  util_strdigit(const char *);
@@ -733,14 +733,6 @@ prog_section_def_t* prog_entfield  (qc_program_t *prog, qcint_t off);
 prog_section_def_t* prog_getdef    (qc_program_t *prog, qcint_t off);
 qcany_t*            prog_getedict  (qc_program_t *prog, qcint_t e);
 qcint_t             prog_tempstring(qc_program_t *prog, const char *_str);
-
-
-/* parser.c */
-struct parser_t;
-parser_t *parser_create(void);
-bool parser_compile_file(parser_t &parser, const char *);
-bool parser_compile_string(parser_t &parser, const char *, const char *, size_t);
-bool parser_finish(parser_t &parser, const char *);
 
 /* ftepp.c */
 struct ftepp_t;

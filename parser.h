@@ -7,8 +7,6 @@
 #include "intrin.h"
 #include "fold.h"
 
-struct parser_t;
-
 #define parser_ctx(p) ((p).lex->tok.ctx)
 
 struct parser_t {
@@ -18,7 +16,7 @@ struct parser_t {
     void remove_ast();
 
     lex_file *lex;
-    int tok;
+    Token tok;
 
     bool ast_cleaned;
 
@@ -76,9 +74,21 @@ struct parser_t {
     intrin m_intrin;
 };
 
-
 /* parser.c */
-char           *parser_strdup     (const char *str);
+inline char *parser_strdup(const char *str)
+{
+    if (str && !*str) {
+        /* actually dup empty strings */
+        auto *out = reinterpret_cast<char*>(mem_a(1));
+        *out = 0;
+        return out;
+    }
+    return util_strdup(str);
+}
 ast_expression *parser_find_global(parser_t &parser, const char *name);
+parser_t *parser_create();
+bool parser_compile_file(parser_t &parser, const char *);
+bool parser_compile_string(parser_t &parser, const char *, const char *, size_t);
+bool parser_finish(parser_t &parser, const char *);
 
 #endif
