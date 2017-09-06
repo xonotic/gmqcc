@@ -19,7 +19,6 @@ static const char *keywords_qc[] = {
 /* For fte/gmgqcc */
 static const char *keywords_fg[] = {
     "switch", "case", "default",
-    "struct", "union",
     "break", "continue",
     "typedef",
     "goto",
@@ -62,8 +61,7 @@ static bool lexwarn(lex_file *lex, int warntype, const char *fmt, ...)
 
 static void lex_token_new(lex_file *lex)
 {
-    if (lex->tok.value)
-        vec_shrinkto(lex->tok.value, 0);
+    lex->tok.value.shrinkto(0);
 
     lex->tok.constval.t  = TYPE_VOID;
     lex->tok.ctx.line    = lex->sline;
@@ -146,28 +144,19 @@ lex_file* lex_open_string(const char *str, size_t len, const char *name)
     return lex;
 }
 
-void lex_cleanup(void)
+void lex_cleanup()
 {
-    size_t i;
-    for (i = 0; i < vec_size(lex_filenames); ++i)
+    for (size_t i = 0; i < vec_size(lex_filenames); ++i)
         mem_d(lex_filenames[i]);
     vec_free(lex_filenames);
 }
 
 void lex_close(lex_file *lex)
 {
-    size_t i;
-    for (i = 0; i < vec_size(lex->frames); ++i)
-        mem_d(lex->frames[i].name);
     vec_free(lex->frames);
-
-    if (lex->modelname)
-        vec_free(lex->modelname);
 
     if (lex->file)
         fclose(lex->file);
-
-    vec_free(lex->tok.value);
 
     /* mem_d(lex->name); collected in lex_filenames */
     mem_d(lex);
@@ -314,14 +303,14 @@ static bool isxdigit_only(int ch)
 /* Append a character to the token buffer */
 static void lex_tokench(lex_file *lex, int ch)
 {
-    vec_push(lex->tok.value, ch);
+    lex->tok.value.push(ch);
 }
 
 /* Append a trailing null-byte */
 static void lex_endtoken(lex_file *lex)
 {
-    vec_push(lex->tok.value, 0);
-    vec_shrinkby(lex->tok.value, 1);
+    lex->tok.value.push(0);
+    lex->tok.value.shrinkby(1);
 }
 
 static bool lex_try_pragma(lex_file *lex)
@@ -630,7 +619,7 @@ static bool lex_finish_frames(lex_file *lex)
             return false;
 
         for (i = 0; i < vec_size(lex->frames); ++i) {
-            if (!strcmp(lex->tok.value, lex->frames[i].name)) {
+            if (lex->frames[i].name == lex->tok.value.c_str()) {
                 lex->frames[i].value = lex->framevalue++;
                 if (lexwarn(lex, WARN_FRAME_MACROS, "duplicate frame macro defined: `%s`", lex->tok.value))
                     return false;
@@ -641,8 +630,8 @@ static bool lex_finish_frames(lex_file *lex)
             continue;
 
         m.value = lex->framevalue++;
-        m.name = util_strdup(lex->tok.value);
-        vec_shrinkto(lex->tok.value, 0);
+        m.name = util_strdup(lex->tok.value.c_str());
+        lex->tok.value.shrinkto(0);
         vec_push(lex->frames, m);
     } while (true);
 
@@ -892,9 +881,9 @@ static Token GMQCC_WARN lex_finish_digit(lex_file *lex, Token lastch)
 
     lex_endtoken(lex);
     if (lex->tok.ttype == Token::FLOATCONST)
-        lex->tok.constval.f = strtod(lex->tok.value, nullptr);
+        lex->tok.constval.f = strtod(lex->tok.value.c_str(), nullptr);
     else
-        lex->tok.constval.i = strtol(lex->tok.value, nullptr, 0);
+        lex->tok.constval.i = strtol(lex->tok.value.c_str(), nullptr, 0);
     return lex->tok.ttype;
 }
 
@@ -953,7 +942,7 @@ Token lex_do(lex_file *lex)
             return (lex->tok.ttype = Token::ERROR);
         lex_endtoken(lex);
         /* skip the known commands */
-        v = lex->tok.value;
+        v = lex->tok.value.c_str();
 
         if (!strcmp(v, "frame") || !strcmp(v, "framesave"))
         {
@@ -1004,9 +993,9 @@ Token lex_do(lex_file *lex)
             if (rc < 0)
                 return (lex->tok.ttype = Token::FATAL);
 
-            v = lex->tok.value;
+            v = lex->tok.value.c_str();
             for (frame = 0; frame < vec_size(lex->frames); ++frame) {
-                if (!strcmp(v, lex->frames[frame].name)) {
+                if (lex->frames[frame].name == v) {
                     lex->framevalue = lex->frames[frame].value;
                     return lex_do(lex);
                 }
@@ -1030,23 +1019,18 @@ Token lex_do(lex_file *lex)
             if (rc < 0)
                 return (lex->tok.ttype = Token::FATAL);
 
-            if (lex->modelname) {
+            if (lex->modelname.size()) {
                 frame_macro m;
+                m.name = std::move(lex->modelname);
                 m.value = lex->framevalue;
-                m.name = lex->modelname;
-                lex->modelname = nullptr;
                 vec_push(lex->frames, m);
             }
-            lex->modelname = lex->tok.value;
-            lex->tok.value = nullptr;
+            lex->modelname = std::string(lex->tok.value.c_str());
             return lex_do(lex);
         }
 
         if (!strcmp(v, "flush"))
         {
-            size_t fi;
-            for (fi = 0; fi < vec_size(lex->frames); ++fi)
-                mem_d(lex->frames[fi].name);
             vec_free(lex->frames);
             /* skip line (fteqcc does it too) */
             ch = lex_getch(lex);
@@ -1070,7 +1054,7 @@ Token lex_do(lex_file *lex)
         }
 
         for (frame = 0; frame < vec_size(lex->frames); ++frame) {
-            if (!strcmp(v, lex->frames[frame].name)) {
+            if (lex->frames[frame].name == v) {
                 lex->tok.constval.i = lex->frames[frame].value;
                 return (lex->tok.ttype = Token::INTCONST);
             }
@@ -1149,6 +1133,9 @@ Token lex_do(lex_file *lex)
         {
             case Token::MUL:
             case Token::DIV:
+            case Token::MOD:
+            case Token::ADD:
+            case Token::SUB:
             case Token::LT:
             case Token::GT:
             case Token::EQ:
@@ -1169,7 +1156,7 @@ Token lex_do(lex_file *lex)
     if (ch == Token::DOT)
     {
         lex_tokench(lex, ch);
-        /* peak ahead once */
+        // peak ahead once
         nextch = lex_getch(lex);
         if (nextch != Token::DOT) {
             lex_ungetch(lex, nextch);
@@ -1179,7 +1166,7 @@ Token lex_do(lex_file *lex)
             else
                 return (lex->tok.ttype = Token::OPERATOR);
         }
-        /* peak ahead again */
+        // peak ahead again
         nextch = lex_getch(lex);
         if (nextch != Token::DOT) {
             lex_ungetch(lex, nextch);
@@ -1190,7 +1177,7 @@ Token lex_do(lex_file *lex)
             else
                 return (lex->tok.ttype = Token::OPERATOR);
         }
-        /* fill the token to be "..." */
+        // fill the token to be "..."
         lex_tokench(lex, ch);
         lex_tokench(lex, ch);
         lex_endtoken(lex);
@@ -1203,7 +1190,7 @@ Token lex_do(lex_file *lex)
         return (lex->tok.ttype = Token::OPERATOR);
     }
 
-    if (ch == Token::ADD || ch == Token::SUB || /* ++, --, +=, -=  and -> as well! */
+    if (ch == Token::ADD || ch == Token::SUB || /* ++, --, +=, -= */
         ch == Token::GT || ch == Token::LT|| /* <<, >>, <=, >=  and >< as well! */
         ch == Token::EQ || ch == Token::NOT || /* <=>, ==, !=                     */
         ch == Token::AND || ch == Token::OR || /* &&, ||, &=, |=                  */
@@ -1226,9 +1213,6 @@ Token lex_do(lex_file *lex)
                 lex_tokench(lex, thirdch);
             else
                 lex_ungetch(lex, thirdch);
-
-        } else if (ch == Token::SUB && nextch == Token::GT) {
-            lex_tokench(lex, nextch);
         } else if (ch == Token::AND && nextch == Token::BITNOT) {
             thirdch = lex_getch(lex);
             if (thirdch != Token::EQ) {
@@ -1290,7 +1274,7 @@ Token lex_do(lex_file *lex)
         lex_endtoken(lex);
         lex->tok.ttype = Token::IDENT;
 
-        v = lex->tok.value;
+        v = lex->tok.value.c_str();
         if (!strcmp(v, "void")) {
             lex->tok.ttype = Token::TYPENAME;
             lex->tok.constval.t = TYPE_VOID;
@@ -1369,7 +1353,7 @@ Token lex_do(lex_file *lex)
         lex->tok.ttype = Token::CHARCONST;
 
         /* It's a vector if we can successfully scan 3 floats */
-        if (util_sscanf(lex->tok.value, " %f %f %f ",
+        if (util_sscanf(lex->tok.value.c_str(), " %f %f %f ",
                    &lex->tok.constval.v.x, &lex->tok.constval.v.y, &lex->tok.constval.v.z) == 3)
 
         {
@@ -1377,10 +1361,10 @@ Token lex_do(lex_file *lex)
         }
         else
         {
-            if (!lex->flags.preprocessing && strlen(lex->tok.value) > 1) {
+            if (!lex->flags.preprocessing && strlen(lex->tok.value.c_str()) > 1) {
                 utf8ch_t u8char;
                 /* check for a valid utf8 character */
-                if (!OPTS_FLAG(UTF8) || !utf8_to(&u8char, (const unsigned char *)lex->tok.value, 8)) {
+                if (!OPTS_FLAG(UTF8) || !utf8_to(&u8char, (const unsigned char *)lex->tok.value.c_str(), 8)) {
                     if (lexwarn(lex, WARN_MULTIBYTE_CHARACTER,
                                 ( OPTS_FLAG(UTF8) ? "invalid multibyte character sequence `%s`"
                                                   : "multibyte character: `%s`" ),
@@ -1391,7 +1375,7 @@ Token lex_do(lex_file *lex)
                     lex->tok.constval.i = u8char;
             }
             else
-                lex->tok.constval.i = lex->tok.value[0];
+                lex->tok.constval.i = lex->tok.value.c_str()[0];
         }
 
         return lex->tok.ttype;

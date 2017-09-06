@@ -74,7 +74,7 @@ static bool parser_next(parser_t &parser)
     return true;
 }
 
-#define parser_tokval(p) ((p).lex->tok.value)
+#define parser_tokval(p) ((p).lex->tok.value.c_str())
 #define parser_token(p)  (&((p).lex->tok))
 
 static ast_expression* parser_find_field(parser_t &parser, const char *name) {

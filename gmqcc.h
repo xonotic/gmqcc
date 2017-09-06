@@ -168,7 +168,7 @@ char *stat_mem_strdup(const char *, bool);
 #define mem_d(PTRN)              free((void*)PTRN)
 #define mem_r(PTRN, SIZE)        realloc((void*)PTRN, SIZE)
 
-#define util_strdup(SRC)         stat_mem_strdup((char*)(SRC), false)
+#define util_strdup(SRC)         stat_mem_strdup((const char*)(SRC), false)
 #define util_strdupe(SRC)        stat_mem_strdup((char*)(SRC), true)
 
 #define util_isalpha(a) ((((unsigned)(a)|32)-'a') < 26)

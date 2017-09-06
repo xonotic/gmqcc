@@ -19,7 +19,8 @@ set(SOURCE_FILES
     ir.h
     lexer.cpp lexer.h
     opts.cpp
-    parser.cpp parser.h
+    # parser.cpp parser.h
+    parser2.cpp parser.h
     stat.cpp
     utf8.cpp
     util.cpp)

@@ -182,7 +182,7 @@ static GMQCC_INLINE char *(*ftepp_predef(const char *name))(ftepp_t *context) {
     return (i != 0) ? ftepp_predefs[i-1].func : nullptr;
 }
 
-#define ftepp_tokval(f) ((f)->lex->tok.value)
+#define ftepp_tokval(f) ((f)->lex->tok.value.mut())
 #define ftepp_ctx(f)    ((f)->lex->tok.ctx)
 
 static void ftepp_errorat(ftepp_t *ftepp, lex_ctx_t ctx, const char *fmt, ...)
