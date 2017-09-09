@@ -42,6 +42,12 @@
     X(IDENT, ) \
     X(TYPENAME, ) \
     X(OPERATOR, ) \
+    X(OP_AND, ) \
+    X(OP_CROSS, ) \
+    X(OP_LE, ) \
+    X(OP_GE, ) \
+    X(OP_LSH, ) \
+    X(OP_RSH, ) \
     /* loop */ \
     X(KEYWORD, ) \
     /* 3 dots, ... */ \

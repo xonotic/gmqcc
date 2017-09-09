@@ -2,8 +2,11 @@
 
 #include <cstring>
 
-// todo: field types
-// todo: void() types
+// fixme: register typedef'd types. this wouldn't matter if parameters required names
+//        defeated by a mere for (i = 0; i < n; ++i)
+//        `for\s*\(\s*([^\s]+)\s*=` -> `for (auto $1 =`
+// fixme: GenericCommand_rpn  --  operators in strings??? specifically "="??
+// fixme: HUD_ItemsTime
 // todo: template traits for each rule to enable prediction instead of backtracking
 // todo: commit to a rule if possible and disable backtracking
 // todo: store memo on heap
@@ -208,11 +211,11 @@ Result opt(ctx_t &ctx) {
 }
 
 /// rule+
-#define CROSS(rule) ([&](ctx_t &) { \
-    TRY(rule(ctx)); \
+#define CROSS(...) ([&](ctx_t &) { \
+    TRY(__VA_ARGS__(ctx)); \
     for (;;) { \
         auto memo = ctx.memo(); \
-        if (!rule(ctx)) { \
+        if (!__VA_ARGS__(ctx)) { \
             ctx.memo(memo); \
             break; \
         } \
@@ -227,7 +230,7 @@ Result cross(ctx_t &ctx) {
 }
 
 /// rule* == (rule+)?
-#define STAR(rule) OPT(CROSS(rule))
+#define STAR(...) OPT(CROSS(__VA_ARGS__))
 
 /// rule* == (rule+)?
 template<Rule rule>
@@ -238,7 +241,9 @@ Result star(ctx_t &ctx) {
 /// rule (s rule)*
 template<Rule rule, Rule s>
 Result sep(ctx_t &ctx) {
-    return seq<rule, star<seq<s, rule>>>(ctx);
+    TRY(rule(ctx));
+    TRY(STAR(seq<s, rule>)(ctx));
+    OK();
 }
 
 /// rule[0] | rule[1..n]
@@ -286,6 +291,39 @@ Result leftop(ctx_t &ctx) {
 
 struct grammar {
 
+    static constexpr auto Void = lit<Token::TYPENAME, 'v', 'o', 'i', 'd'>;
+    static constexpr auto Char = lit<Token::TYPENAME, 'c', 'h', 'a', 'r'>;
+    static constexpr auto Int = lit<Token::TYPENAME, 'i', 'n', 't'>;
+    static constexpr auto Float = lit<Token::TYPENAME, 'f', 'l', 'o', 'a', 't'>;
+    static constexpr auto Vector = lit<Token::TYPENAME, 'v', 'e', 'c', 't', 'o', 'r'>;
+    static constexpr auto String = lit<Token::TYPENAME, 's', 't', 'r', 'i', 'n', 'g'>;
+    static constexpr auto Entity = lit<Token::TYPENAME, 'e', 'n', 't', 'i', 't', 'y'>;
+
+    static constexpr auto Enum = lit<Token::IDENT, 'e', 'n', 'u', 'm'>;
+    static constexpr auto Typedef = lit<Token::IDENT, 't', 'y', 'p', 'e', 'd', 'e', 'f'>;
+
+    static constexpr auto Const = lit<Token::KEYWORD, 'c', 'o', 'n', 's', 't'>;
+    static constexpr auto Extern = lit<Token::KEYWORD, 'e', 'x', 't', 'e', 'r', 'n'>;
+    static constexpr auto Static = lit<Token::IDENT, 's', 't', 'a', 't', 'i', 'c'>;
+    static constexpr auto Noref = lit<Token::IDENT, 'n', 'o', 'r', 'e', 'f'>;
+    static constexpr auto Local = lit<Token::KEYWORD, 'l', 'o', 'c', 'a', 'l'>;
+    static constexpr auto Var = lit<Token::IDENT, 'v', 'a', 'r'>;
+
+    static constexpr auto If = lit<Token::KEYWORD, 'i', 'f'>;
+    static constexpr auto Else = lit<Token::KEYWORD, 'e', 'l', 's', 'e'>;
+    static constexpr auto Switch = lit<Token::IDENT, 's', 'w', 'i', 't', 'c', 'h'>;
+    static constexpr auto Case = lit<Token::IDENT, 'c', 'a', 's', 'e'>;
+    static constexpr auto Default = lit<Token::KEYWORD, 'd', 'e', 'f', 'a', 'u', 'l', 't'>;
+
+    static constexpr auto While = lit<Token::KEYWORD, 'w', 'h', 'i', 'l', 'e'>;
+    static constexpr auto Do = lit<Token::KEYWORD, 'd', 'o'>;
+    static constexpr auto For = lit<Token::KEYWORD, 'f', 'o', 'r'>;
+
+    static constexpr auto Goto = lit<Token::IDENT, 'g', 'o', 't', 'o'>;
+    static constexpr auto Continue = lit<Token::KEYWORD, 'c', 'o', 'n', 't', 'i', 'n', 'u', 'e'>;
+    static constexpr auto Break = lit<Token::KEYWORD, 'b', 'r', 'e', 'a', 'k'>;
+    static constexpr auto Return = lit<Token::KEYWORD, 'r', 'e', 't', 'u', 'r', 'n'>;
+
     // declarations
 
     /// : translationUnit? EOF
@@ -304,12 +342,14 @@ struct grammar {
     /// : pragma
     /// | functionDefinition
     /// | declaration
+    /// | enumDeclaration
     /// | ';'
     RULE(externalDeclaration) {
         TRY(alt<
                 pragma,
                 functionDefinition,
                 declaration,
+                enumDeclaration,
                 tok<Token::SEMICOLON>
         >(ctx));
         OK();
@@ -328,122 +368,94 @@ struct grammar {
     }
 
     /// : declarationSpecifiers? declarator compoundStatement
+    /// | declarationSpecifiers? declarator '=' compoundStatement  # legacy
     RULE(functionDefinition) {
         TRY(OPT(declarationSpecifiers)(ctx));
         TRY(declarator(ctx));
+        TRY(OPT(tok<Token::EQ>)(ctx)); // legacy
         TRY(compoundStatement(ctx));
         OK();
     }
 
-    /// : declarationSpecifier+
+    /// : attribute* (storageClassSpecifier | typeQualifier)* typeSpecifier
     RULE(declarationSpecifiers) {
-        TRY(CROSS(declarationSpecifier)(ctx));
+        TRY(STAR(attribute)(ctx));
+        TRY(STAR(alt<storageClassSpecifier, typeQualifier>)(ctx));
+        TRY(typeSpecifier(ctx));
         OK();
     }
 
-    /// : storageClassSpecifier
-    /// | typeSpecifier
-    /// | typeQualifier
-    /// | functionSpecifier
-    RULE(declarationSpecifier) {
-        TRY(alt<
-                storageClassSpecifier,
-                typeSpecifier,
-                typeQualifier,
-                functionSpecifier
-        >(ctx));
+
+    /// : '[[' X ']]'
+    RULE(attribute) {
+        EXPECT(Token::ATTRIBUTE_OPEN);
+        if (ACCEPT_IDENT("alias")) {
+            EXPECT(Token::PAREN_OPEN);
+            TRY(CROSS(tok<Token::STRINGCONST>)(ctx));
+            EXPECT(Token::PAREN_CLOSE);
+        } else if (ACCEPT_IDENT("eraseable")) {
+        } else if (ACCEPT_IDENT("accumulate")) {
+        } else {
+            ERR("unknown attribute '" + STRING() + "'");
+        }
+        EXPECT(Token::ATTRIBUTE_CLOSE);
         OK();
     }
 
     /// : 'typedef'
     /// | 'extern'
     /// | 'static'
+    /// | 'noref'
+    /// | 'local'  # legacy
+    /// | 'var'    # legacy
     RULE(storageClassSpecifier) {
-        constexpr auto Typedef = lit<Token::KEYWORD, 't', 'y', 'p', 'e', 'd', 'e', 'f'>;
-        constexpr auto Extern = lit<Token::KEYWORD, 'e', 'x', 't', 'e', 'r', 'n'>;
-        constexpr auto Static = lit<Token::KEYWORD, 's', 't', 'a', 't', 'i', 'c'>;
-
         TRY(alt<
                 Typedef,
                 Extern,
-                Static
+                Static,
+                Noref,
+                Local,
+                Var
         >(ctx));
         OK();
     }
 
-    /// : ('void' | 'char' | 'int' | 'float' | 'entity')
-    /// | enumSpecifier
-    /// | typedefName
+    /// : ('.' | '...')* directTypeSpecifier ('(' parameterTypeList ')')?
     RULE(typeSpecifier) {
-        constexpr auto Void = lit<Token::TYPENAME, 'v', 'o', 'i', 'd'>;
-        constexpr auto Char = lit<Token::TYPENAME, 'c', 'h', 'a', 'r'>;
-        constexpr auto Int = lit<Token::TYPENAME, 'i', 'n', 't'>;
-        constexpr auto Float = lit<Token::TYPENAME, 'f', 'l', 'o', 'a', 't'>;
-        constexpr auto Entity = lit<Token::TYPENAME, 'e', 'n', 't', 'i', 't', 'y'>;
+        TRY(STAR(alt<tok<Token::DOT>, tok<Token::DOTS>>)(ctx));
+        TRY(directTypeSpecifier(ctx));
+        TRY(OPT(seq<tok<Token::PAREN_OPEN>, opt<parameterTypeList>, tok<Token::PAREN_CLOSE>>)(ctx));
+        OK();
+    }
 
+    /// : ('void' | 'char' | 'int' | 'float' | 'vector' | 'string' | 'entity')
+    /// | typedefName
+    RULE(directTypeSpecifier) {
         TRY(alt<
                 alt<
                         Void,
                         Char,
                         Int,
                         Float,
+                        Vector,
+                        String,
                         Entity
                 >,
-                enumSpecifier,
                 typedefName
         >(ctx));
         OK();
     }
 
-    /// : 'enum' '{' enumeratorList ','? '}'
-    RULE(enumSpecifier) {
-        constexpr auto Enum = lit<Token::KEYWORD, 'e', 'n', 'u', 'm'>;
-
-        TRY(Enum(ctx));
-        TRY(tok<Token::BRACE_OPEN>(ctx));
-        TRY(enumeratorList(ctx));
-        TRY(OPT(tok<Token::COMMA>)(ctx));
-        TRY(tok<Token::BRACE_CLOSE>(ctx));
-        OK();
-    }
-
-    /// : enumerator (',' enumerator)*
-    RULE(enumeratorList) {
-        TRY(sep<enumerator, tok<Token::COMMA>>(ctx));
-        OK();
-    }
-
-    /// : enumerationConstant ('=' constantExpression)?
-    RULE(enumerator) {
-        TRY(enumerationConstant(ctx));
-        TRY(OPT(seq<tok<Token::EQ>, constantExpression>)(ctx));
-        OK();
-    }
-
-    /// : Identifier
-    RULE(enumerationConstant) {
-        TRY(tok<Token::IDENT>(ctx));
-        OK();
-    }
-
     /// : Identifier
     RULE(typedefName) {
-        TRY(tok<Token::TYPENAME>(ctx));
+        TRY(tok<Token::IDENT>(ctx));
         OK();
     }
 
     /// : 'const'
     RULE(typeQualifier) {
-        constexpr auto Const = lit<Token::KEYWORD, 'c', 'o', 'n', 's', 't'>;
-
         TRY(Const(ctx));
         OK();
-    }
-
-    /// : '[[' .+ ']]'
-    /// todo
-    RULE(functionSpecifier) {
-        BT();
     }
 
     /// : Identifier (
@@ -464,35 +476,34 @@ struct grammar {
     ///   | '(' parameterTypeList? ')'
     /// )+
     RULE(abstractDeclarator) {
-        TRY(star<alt<
+        TRY(cross<alt<
                 seq<tok<Token::BRACKET_OPEN>, opt<assignmentExpression_15>, tok<Token::BRACKET_CLOSE>>,
                 seq<tok<Token::PAREN_OPEN>, opt<parameterTypeList>, tok<Token::PAREN_CLOSE>>
         >>(ctx));
         OK();
     }
 
-    /// : parameterList (',' parameterVarargs)?
-    /// | parameterVarargs
+    /// : (parameterVarargDeclaration | parameterDeclaration) (',' (parameterVarargDeclaration | parameterDeclaration))*
     RULE(parameterTypeList) {
-        TRY(opt<alt<
-                seq<parameterList, opt<seq<tok<Token::COMMA>, tok<Token::DOTS>>>>,
-                tok<Token::DOTS>
-        >>(ctx));
-        OK();
-    }
-
-    /// : parameterDeclaration (',' parameterDeclaration)*
-    RULE(parameterList) {
-        TRY(sep<parameterDeclaration, tok<Token::COMMA>>(ctx));
+        TRY(sep<alt<parameterVarargDeclaration, parameterDeclaration>, tok<Token::COMMA>>(ctx));
         OK();
     }
 
     /// : declarationSpecifiers (declarator | abstractDeclarator?)
     RULE(parameterDeclaration) {
-        TRY(seq<declarationSpecifiers, alt<
+        TRY(declarationSpecifiers(ctx));
+        TRY(alt<
                 declarator,
-                opt<abstractDeclarator>>
+                opt<abstractDeclarator>
         >(ctx));
+        OK();
+    }
+
+    /// : declarationSpecifiers? '...' Identifier?
+    RULE(parameterVarargDeclaration) {
+        TRY(OPT(declarationSpecifiers)(ctx));
+        TRY(tok<Token::DOTS>(ctx));
+        TRY(OPT(tok<Token::IDENT>)(ctx));
         OK();
     }
 
@@ -532,6 +543,35 @@ struct grammar {
         OK();
     }
 
+    /// : 'enum' '{' enumeratorList ','? '}'
+    RULE(enumDeclaration) {
+        TRY(Enum(ctx));
+        TRY(tok<Token::BRACE_OPEN>(ctx));
+        TRY(enumeratorList(ctx));
+        TRY(OPT(tok<Token::COMMA>)(ctx));
+        TRY(tok<Token::BRACE_CLOSE>(ctx));
+        OK();
+    }
+
+    /// : enumerator (',' enumerator)*
+    RULE(enumeratorList) {
+        TRY(sep<enumerator, tok<Token::COMMA>>(ctx));
+        OK();
+    }
+
+    /// : enumerationConstant ('=' constantExpression)?
+    RULE(enumerator) {
+        TRY(enumerationConstant(ctx));
+        TRY(OPT(seq<tok<Token::EQ>, constantExpression>)(ctx));
+        OK();
+    }
+
+    /// : Identifier
+    RULE(enumerationConstant) {
+        TRY(tok<Token::IDENT>(ctx));
+        OK();
+    }
+
     // statements
 
     /// : labeledStatement
@@ -553,19 +593,21 @@ struct grammar {
     }
 
     /// : (
-    ///     Identifier
-    ///   | 'case' constantExpression
+    ///     'case' constantExpression
     ///   | 'default'
+    ///   |  Identifier
     ///   ) ':' statement
+    ///   | ':' Identifier  # legacy
     RULE(labeledStatement) {
-        constexpr auto Case = lit<Token::KEYWORD, 'c', 'a', 's', 'e'>;
-        constexpr auto Default = lit<Token::KEYWORD, 'd', 'e', 'f', 'a', 'u', 'l', 't'>;
-
-        TRY(seq<alt<
-                tok<Token::IDENT>,
-                seq<Case, constantExpression>,
-                Default
-        >, tok<Token::COLON>, statement>(ctx));
+        constexpr auto legacy = seq<tok<Token::COLON>, tok<Token::IDENT>>;
+        TRY(alt<
+                seq<alt<
+                        seq<Case, constantExpression>,
+                        Default,
+                        tok<Token::IDENT>
+                >, tok<Token::COLON>, alt<statement, declaration>>, // declarations are an extension
+                legacy
+        >(ctx));
         OK();
     }
 
@@ -594,10 +636,6 @@ struct grammar {
     /// : 'if' '(' expression ')' statement ('else' statement)?
     /// | 'switch' '(' expression ')' statement
     RULE(selectionStatement) {
-        constexpr auto If = lit<Token::KEYWORD, 'i', 'f'>;
-        constexpr auto Else = lit<Token::KEYWORD, 'e', 'l', 's', 'e'>;
-        constexpr auto Switch = lit<Token::KEYWORD, 's', 'w', 'i', 't', 'c', 'h'>;
-
         TRY(alt<
                 seq<If, tok<Token::PAREN_OPEN>, expression, tok<Token::PAREN_CLOSE>, statement, opt<seq<Else, statement>>>,
                 seq<Switch, tok<Token::PAREN_OPEN>, expression, tok<Token::PAREN_CLOSE>, statement>
@@ -609,10 +647,6 @@ struct grammar {
     /// | 'do' statement 'while' '(' expression ')' ';'
     /// | 'for' '(' forCondition ')' statement
     RULE(iterationStatement) {
-        constexpr auto While = lit<Token::KEYWORD, 'w', 'h', 'i', 'l', 'e'>;
-        constexpr auto Do = lit<Token::KEYWORD, 'd', 'o'>;
-        constexpr auto For = lit<Token::KEYWORD, 'f', 'o', 'r'>;
-
         TRY(alt<
                 seq<While, tok<Token::PAREN_OPEN>, expression, tok<Token::PAREN_CLOSE>, statement>,
                 seq<Do, statement, While, tok<Token::PAREN_OPEN>, expression, tok<Token::PAREN_CLOSE>, tok<Token::SEMICOLON>>,
@@ -621,7 +655,7 @@ struct grammar {
         OK();
     }
 
-    /// : (forDeclaration | expression)? ';' forExpression? ';' forExpression?
+    /// : (expression | forDeclaration)? ';' forExpression? ';' forExpression?
     RULE(forCondition) {
         /// : declarationSpecifiers initDeclaratorList?
         constexpr auto forDeclaration = seq<declarationSpecifiers, opt<initDeclaratorList>>;
@@ -639,11 +673,6 @@ struct grammar {
     /// | 'break' ';'
     /// | 'return' expression? ';'
     RULE(jumpStatement) {
-        constexpr auto Goto = lit<Token::KEYWORD, 'g', 'o', 't', 'o'>;
-        constexpr auto Continue = lit<Token::KEYWORD, 'c', 'o', 'n', 't', 'i', 'n', 'u', 'e'>;
-        constexpr auto Break = lit<Token::KEYWORD, 'b', 'r', 'e', 'a', 'k'>;
-        constexpr auto Return = lit<Token::KEYWORD, 'r', 'e', 't', 'u', 'r', 'n'>;
-
         TRY(alt<
                 seq<Goto, tok<Token::IDENT>, tok<Token::SEMICOLON>>,
                 seq<Continue, tok<Token::SEMICOLON>>,
@@ -685,25 +714,25 @@ struct grammar {
                         tok<Token::MOD>,
                         tok<Token::ADD>,
                         tok<Token::SUB>,
-                        seq<tok<Token::LT>, tok<Token::LT>>,
-                        seq<tok<Token::GT>, tok<Token::GT>>,
+                        tok<Token::OP_LSH>,
+                        tok<Token::OP_RSH>,
                         tok<Token::AND>,
                         tok<Token::XOR>,
                         tok<Token::OR>
                 >, tok<Token::EQ>>
         >;
         TRY(alt<
-                seq<postfixExpression_2, assignmentOperator, assignmentExpression_15>,
+                seq<alt<postfixExpression_2, Return>, assignmentOperator, assignmentExpression_15>,
                 conditionalExpression
         >(ctx));
         OK();
     }
 
-    /// : logicalOrExpression_14 ('?' expression ':' conditionalExpression)?
+    /// : logicalOrExpression_14 ('?' expression ':' expression)?
     /// right associative
     RULE(conditionalExpression) {
         TRY(logicalOrExpression_14(ctx));
-        TRY(OPT(seq<tok<Token::QUESTION>, expression, tok<Token::COLON>, conditionalExpression>)(ctx));
+        TRY(OPT(seq<tok<Token::QUESTION>, expression, tok<Token::COLON>, expression>)(ctx));
         OK();
     }
 
@@ -720,7 +749,7 @@ struct grammar {
     RULE(logicalAndExpression_13) {
         TRY(leftop<
                 inclusiveOrExpression_12,
-                seq<tok<Token::AND>, tok<Token::AND>>
+                tok<Token::OP_AND>
         >(ctx));
         OK();
     }
@@ -769,8 +798,10 @@ struct grammar {
         TRY(leftop<
                 shiftExpression_7,
                 alt<
-                        seq<tok<Token::LT>, opt<tok<Token::EQ>>>,
-                        seq<tok<Token::GT>, opt<tok<Token::EQ>>>
+                        tok<Token::LT>,
+                        tok<Token::OP_LE>,
+                        tok<Token::GT>,
+                        tok<Token::OP_GE>
                 >
         >(ctx));
         OK();
@@ -781,8 +812,8 @@ struct grammar {
         TRY(leftop<
                 additiveExpression_6,
                 alt<
-                        seq<tok<Token::LT>, tok<Token::LT>>,
-                        seq<tok<Token::GT>, tok<Token::GT>>
+                        tok<Token::OP_LSH>,
+                        tok<Token::OP_RSH>
                 >
         >(ctx));
         OK();
@@ -800,14 +831,15 @@ struct grammar {
         OK();
     }
 
-    /// : castExpression_3 (('*' | '/' | '%') castExpression_3)*
+    /// : castExpression_3 (('*' | '/' | '%' | '><') castExpression_3)*
     RULE(multiplicativeExpression_5) {
         TRY(leftop<
                 castExpression_3,
                 alt<
                         tok<Token::MUL>,
                         tok<Token::DIV>,
-                        tok<Token::MOD>
+                        tok<Token::MOD>,
+                        tok<Token::OP_CROSS>
                 >
         >(ctx));
         OK();
@@ -821,13 +853,13 @@ struct grammar {
         return unaryExpression_3(ctx);
     }
 
-    /// : postfixExpression_2
+    /// : postfixExpression_2 ('**' unaryExpression_3)*
     /// | ('++' | '--') unaryExpression_3
     /// | ('+' | '-' | '~' | '!') castExpression_3
     /// right associative
     RULE(unaryExpression_3) {
         TRY(alt<
-                postfixExpression_2,
+                seq<postfixExpression_2, star<seq<tok<Token::MUL>, tok<Token::MUL>, unaryExpression_3>>>,
                 seq<alt<
                         seq<tok<Token::ADD>, tok<Token::ADD>>,
                         seq<tok<Token::SUB>, tok<Token::SUB>>
@@ -867,7 +899,7 @@ struct grammar {
     /// : Identifier
     /// | Constant
     /// | StringLiteral+
-    /// | '...' '(' expression ',' typeSpecifier ')'  # absolute va_arg
+    /// | '...' '(' assignmentExpression_15 ',' typeSpecifier ')'  # absolute va_arg
     /// | '(' expression ')'
     RULE(primaryExpression) {
         TRY(alt<
@@ -877,7 +909,8 @@ struct grammar {
                 tok<Token::CHARCONST>,
                 tok<Token::VECTORCONST>,
                 cross<tok<Token::STRINGCONST>>,
-                seq<tok<Token::DOTS>, tok<Token::PAREN_OPEN>, expression, tok<Token::COMMA>, typeSpecifier, tok<Token::PAREN_CLOSE>>,
+                seq<tok<Token::HASH>, tok<Token::INTCONST>>,
+                seq<tok<Token::DOTS>, tok<Token::PAREN_OPEN>, assignmentExpression_15, tok<Token::COMMA>, typeSpecifier, tok<Token::PAREN_CLOSE>>,
                 seq<tok<Token::PAREN_OPEN>, expression, tok<Token::PAREN_CLOSE>>
         >(ctx));
         OK();

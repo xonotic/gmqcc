@@ -1124,6 +1124,25 @@ Token lex_do(lex_file *lex)
         lex_ungetch(lex, nextch);
     }
 
+#define MERGE(c, a, b) \
+    if (ch == Token::a) { \
+        nextch = lex_getch(lex); \
+        if (nextch == Token::b) { \
+            lex_tokench(lex, ch); \
+            lex_tokench(lex, nextch); \
+            lex_endtoken(lex); \
+            return (lex->tok.ttype = Token::c); \
+        } \
+        lex_ungetch(lex, nextch); \
+    }
+
+    MERGE(OP_AND, AND, AND) // &&
+    MERGE(OP_CROSS, GT, LT) // ><
+    MERGE(OP_LE, LT, EQ) // <=
+    MERGE(OP_GE, GT, EQ) // >=
+    MERGE(OP_LSH, LT, LT) // <<
+    MERGE(OP_RSH, GT, GT) // >>
+
     if (lex->flags.noops)
     {
         /* Detect characters early which are normally
