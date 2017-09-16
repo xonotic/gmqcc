@@ -1,6 +1,130 @@
 #include "parser.h"
 
 #include <cstring>
+#include <map>
+
+
+/*
+ * have a tape stack for pushing assigning CST nodes to as they are completed
+ * have a templated destructor wrapper serving double duty as a destructor + union discriminant
+ * reset the stack on error, destroying everything as needed
+ * on completion of some nodes (if, while, for, etc -- probably everything but expressions)
+ * take all prior parameters and produce some kind of AST node
+ * is there a way to convert from a pointer to a destructor impl to its size? need a size for traversing the stack
+ *
+ */
+
+template<class T>
+void destructor(void *v) {
+    reinterpret_cast<T *>(v)->~T();
+}
+
+class stack_t {
+    using byte = std::uint8_t;
+    using destructor_t = void (&)(void *it);
+
+    struct entry_t {
+        stack_t *owner;
+        std::size_t size;
+        std::size_t offset;
+        destructor_t dtor;
+
+        entry_t() : entry_t(nullptr, static_cast<std::size_t>(0), static_cast<std::size_t>(0), destructor<nullptr_t>) {}
+
+        entry_t(stack_t *owner, std::size_t size, std::size_t offset, destructor_t dtor) : owner(owner),
+                                                                                                 size(size),
+                                                                                                 offset(offset),
+                                                                                                 dtor(dtor) {}
+
+        ~entry_t() {
+            auto self = this;
+            printf("%p\n", self);
+            auto &stack = owner->stack;
+            auto ptr = &stack[offset];
+            printf("DELETE AT %p with %p\n", &stack[offset], dtor);
+            dtor(reinterpret_cast<void *>(ptr));
+        }
+    };
+
+    std::vector<entry_t> entries;
+    std::vector<byte> stack;
+
+public:
+
+    using size_t = struct {
+        size_t entries;
+        size_t stack;
+    };
+
+    size_t size() {
+        return {entries.size(), stack.size()};
+    }
+
+    std::size_t sizeat(std::size_t i) {
+        return entries[i].size;
+    }
+
+    void resize(size_t sp) {
+        entries.resize(sp.entries);
+        stack.resize(sp.stack);
+    }
+
+    template<class T>
+    void push(T &&it) {
+        auto size = sizeof(T);
+        auto offset = stack.size();
+        stack.resize(offset + size);
+        new(&stack[offset]) T(std::move(it));
+        auto &dtor = destructor<T>;
+        printf("MADE AT %p with %p\n", &stack[offset], dtor);
+        entries.emplace_back(this, size, offset, dtor);
+    }
+
+    void pop() {
+        auto size = entries.back().size;
+        entries.pop_back();
+        stack.resize(stack.size() - size);
+    }
+
+};
+
+template<class T, class U = T>
+T exchange(T &obj, U &&new_value) {
+    T old_value = std::move(obj);
+    obj = std::forward<U>(new_value);
+    return old_value;
+}
+
+//void never() {
+//    struct test {
+//        std::uint8_t okay;
+//        std::uint8_t *x;
+//
+//        test() {
+//            this->x = new std::uint8_t;
+//            this->okay = 47;
+//            printf("allocated %p\n", this->x);
+//        }
+//
+//        test(test &&o) : x(exchange(o.x, nullptr)), okay(o.okay) {
+//            printf("stole from %p into %p\n", &o, this);
+//        }
+//
+//        ~test() {
+//            printf("bye %p\n", this);
+//            delete this->x;
+//        }
+//    };
+//    auto d2 = destructor<test>;
+//    printf("dtor %p\n", d2);
+//    {
+////        auto it = test{};
+////        printf("pushing: %p\n", &it);
+////        stack.push(std::move(it));
+////        stack.pop();
+//    }
+//    printf("over\n");
+//}
 
 // fixme: register typedef'd types. this wouldn't matter if parameters required names
 //        defeated by a mere for (i = 0; i < n; ++i)
@@ -65,6 +189,7 @@ struct memo_t {
     size_t peekpos;
     size_t line, column;
     size_t idx;
+    stack_t::size_t sp;
 };
 
 struct ctx_t {
@@ -72,13 +197,17 @@ struct ctx_t {
     lex_file &lex;
     Token tok;
 
+    stack_t stack = {};
+
+    std::map<std::string, int> typedefs;
+
     explicit ctx_t(parser_t &parser) : parser(parser), lex(*parser.lex) {
         tok = Token::NONE;
     }
 
     memo_t memo() {
         auto idx = lex.file ? ftell(lex.file) : lex.open_string_pos;
-        return memo_t{lex.tok, lex.peek, lex.peekpos, lex.line, lex.column, idx};
+        return memo_t{lex.tok, lex.peek, lex.peekpos, lex.line, lex.column, idx, stack.size()};
     }
 
     void memo(memo_t memo) {
@@ -93,6 +222,7 @@ struct ctx_t {
         } else if (lex.open_string) {
             lex.open_string_pos = memo.idx;
         }
+        stack.resize(memo.sp);
     }
 
     void next() {
@@ -142,11 +272,40 @@ private:
 
 static bool parser_compile(ctx_t &&ctx);
 
+using Rule = Result(ctx_t &ctx);
+
 namespace parse {
 
+    Result dummy_result() {
+        return Result::OK;
+    }
+
+    template<class G, class R>
+    auto rule_do(ctx_t &ctx) -> decltype(R::act(ctx, {}, {}, static_cast<G *>(nullptr), 0), dummy_result()) {
+        auto begin = ctx.stack.size();
+        ctx.rule_enter(R::name);
+        auto ret = R::call(ctx);
+        ctx.rule_leave(R::name, ret);
+        if (ret) {
+            auto end = ctx.stack.size();
+            end.stack -= ctx.stack.sizeat(end.entries -= 1);
+            R::act(ctx, begin, end, static_cast<G *>(nullptr), 0);
+        }
+        return ret;
+    }
+
 #define RULE(rule) \
-static Result rule(ctx_t &ctx) { ctx.rule_enter(#rule); auto ret = do_##rule(ctx); ctx.rule_leave(#rule, ret); return ret; } \
-static Result do_##rule(ctx_t &ctx)
+struct rule##_traits { \
+    static constexpr const char *name = #rule; \
+    static Result call(ctx_t &ctx) { return impl_##rule##_fn(ctx); } \
+    template<class G> static auto act(ctx_t &ctx, stack_t::size_t begin, stack_t::size_t end, G*, int) -> decltype(G::act_##rule(ctx, begin, end), void()) { G::act_##rule(ctx, begin, end); } \
+    template<class G> static auto act(ctx_t&, stack_t::size_t, stack_t::size_t, G*, long) -> decltype(void()) { } \
+}; \
+static Result rule(ctx_t &ctx) { return parse::rule_do<grammar, rule##_traits>(ctx); } \
+static Result impl_##rule##_fn(ctx_t &ctx)
+
+#define ACTION(rule) \
+static void act_##rule(ctx_t &ctx, stack_t::size_t begin, stack_t::size_t end)
 
 #define TRY(...) do { \
     auto ret = __VA_ARGS__; \
@@ -183,7 +342,7 @@ static Result do_##rule(ctx_t &ctx)
     }
 }
 
-using Rule = Result(ctx_t &ctx);
+namespace utils {
 
 #define BT() ERR("BT")
 
@@ -289,6 +448,19 @@ Result leftop(ctx_t &ctx) {
     return sep<next, op>(ctx);
 }
 
+template<Rule rule, class Then>
+Result when(ctx_t &ctx) {
+    auto ret = rule(ctx);
+    if (ret) {
+        (*static_cast<Then *>(nullptr))(ctx);
+    }
+    return ret;
+}
+
+}
+
+using namespace utils;
+
 struct grammar {
 
     static constexpr auto Void = lit<Token::TYPENAME, 'v', 'o', 'i', 'd'>;
@@ -333,11 +505,18 @@ struct grammar {
         OK();
     }
 
+    ACTION(compilationUnit) {
+        printf("DONE!\n");
+    }
+
     /// : externalDeclaration+
     RULE(translationUnit) {
         TRY(CROSS(externalDeclaration)(ctx));
         OK();
     }
+
+    struct externalDeclaration_declaration {
+    };
 
     /// : pragma
     /// | functionDefinition
@@ -353,6 +532,16 @@ struct grammar {
                 tok<Token::SEMICOLON>
         >(ctx));
         OK();
+    }
+
+    ACTION(declaration) {
+        printf("START %d\n", begin);
+        ctx.stack.push(externalDeclaration_declaration{});
+    }
+
+    ACTION(externalDeclaration) {
+
+        printf("FINISH %d\n", begin);
     }
 
     RULE(pragma) {
@@ -385,6 +574,14 @@ struct grammar {
         OK();
     }
 
+    struct attribute_alias {
+    };
+
+    struct attribute_eraseable {
+    };
+
+    struct attribute_accumulate {
+    };
 
     /// : '[[' X ']]'
     RULE(attribute) {
@@ -393,14 +590,20 @@ struct grammar {
             EXPECT(Token::PAREN_OPEN);
             TRY(CROSS(tok<Token::STRINGCONST>)(ctx));
             EXPECT(Token::PAREN_CLOSE);
+            ctx.stack.push(attribute_alias{});
         } else if (ACCEPT_IDENT("eraseable")) {
+            ctx.stack.push(attribute_eraseable{});
         } else if (ACCEPT_IDENT("accumulate")) {
+            ctx.stack.push(attribute_accumulate{});
         } else {
             ERR("unknown attribute '" + STRING() + "'");
         }
         EXPECT(Token::ATTRIBUTE_CLOSE);
         OK();
     }
+
+    struct storageClass_typedef {
+    };
 
     /// : 'typedef'
     /// | 'extern'
@@ -409,8 +612,11 @@ struct grammar {
     /// | 'local'  # legacy
     /// | 'var'    # legacy
     RULE(storageClassSpecifier) {
+        static auto handleTypedef = [](ctx_t &ctx) {
+            ctx.stack.push(storageClass_typedef{});
+        };
         TRY(alt<
-                Typedef,
+                when<Typedef, decltype(handleTypedef)>,
                 Extern,
                 Static,
                 Noref,
@@ -448,8 +654,18 @@ struct grammar {
 
     /// : Identifier
     RULE(typedefName) {
-        TRY(tok<Token::IDENT>(ctx));
-        OK();
+        if (ACCEPT(Token::TYPENAME)) {
+            OK();
+        }
+        if (PEEK() == Token::IDENT) {
+            auto typedefs = ctx.typedefs;
+            auto td = typedefs.find(std::string(STRING()));
+            if (td != typedefs.end()) {
+                ctx.next();
+                OK();
+            }
+        }
+        BT();
     }
 
     /// : 'const'
@@ -512,6 +728,14 @@ struct grammar {
         TRY(declarationSpecifiers(ctx));
         TRY(OPT(initDeclaratorList)(ctx));
         TRY(tok<Token::SEMICOLON>(ctx));
+
+        // we're done, might have to register a typedef
+//        auto typedefs = ctx.typedefs;
+//        auto td = typedefs.find(std::string(STRING()));
+//        if (td != typedefs.end()) {
+//            ctx.next();
+//            OK();
+//        }
         OK();
     }
 
