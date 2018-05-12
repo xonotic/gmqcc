@@ -3323,6 +3323,7 @@ bool ir_builder::generateGlobal(ir_value *global, bool islocal)
          * the function.
          */
         if (global->m_flags & IR_FLAG_ERASABLE && global->m_reads.empty() && global->m_vtype == TYPE_FUNCTION) {
+            ++opts_optimizationcount[OPTIM_ERASE];
             return true;
         }
 
