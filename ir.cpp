@@ -3322,7 +3322,7 @@ bool ir_builder::generateGlobal(ir_value *global, bool islocal)
          * if we're eraseable and the function isn't referenced ignore outputting
          * the function.
          */
-        if (global->m_flags & IR_FLAG_ERASABLE && global->m_reads.empty()) {
+        if (global->m_flags & IR_FLAG_ERASABLE && global->m_reads.empty() && global->m_vtype == TYPE_FUNCTION) {
             return true;
         }
 
