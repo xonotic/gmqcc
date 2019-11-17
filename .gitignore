@@ -13,3 +13,6 @@ testsuite
 
 build/
 .idea/
+
+out.dat
+out.lno

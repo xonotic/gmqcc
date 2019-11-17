@@ -15,4 +15,7 @@ float  (float val)                floor     = #14;
 float  (float val1, float val2)   pow       = #15;
 vector (string str)               stov      = #16;
 
+// xon uses these flags:
+// ./gmqcc -std=gmqcc -Ooverlap-locals -O3 -Wall -Wno-field-redeclared -flno -futf8 -fno-bail-on-werror -frelaxed-switch -freturn-assignments tests/_file.qc -o out.dat && ./qcvm out.dat
+
 void main() {}
