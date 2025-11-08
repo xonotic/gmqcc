@@ -843,7 +843,7 @@ static bool parser_sy_apply_operator(parser_t *parser, shunt *sy)
             if (NotSameType(TYPE_FLOAT)) {
                 ast_type_to_string(exprs[0], ty1, sizeof(ty1));
                 ast_type_to_string(exprs[1], ty2, sizeof(ty2));
-                compile_error(ctx, "invalid types used in comparision: %s and %s",
+                compile_error(ctx, "invalid types used in comparison: %s and %s",
                     ty1, ty2);
 
                 return false;

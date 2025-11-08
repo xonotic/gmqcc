@@ -550,7 +550,7 @@ static void task_template_destroy(task_template_t *tmpl) {
         mem_d(it);
 
     /*
-     * Nullify all the template members otherwise nullptr comparision
+     * Nullify all the template members otherwise nullptr comparison
      * checks will fail if tmpl pointer is reused.
      */
     mem_d(tmpl->tempfilename);
