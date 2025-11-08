@@ -49,6 +49,8 @@ GSRCS += util.cpp
 
 # Collect all the source files for QCVM.
 QSRCS := exec.cpp
+QSRCS += conout.cpp
+QSRCS += opts.cpp
 QSRCS += stat.cpp
 QSRCS += util.cpp
 
